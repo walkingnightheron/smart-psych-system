@@ -45,6 +45,8 @@ application-local.yml
 application-local.properties
 *.pem
 *.key
+opencode.json
+.opencode/
 
 # 测试与覆盖率
 coverage/

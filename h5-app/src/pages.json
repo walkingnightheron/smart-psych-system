@@ -3,38 +3,50 @@
     {
       "path": "pages/login/login",
       "style": {
-        "navigationBarTitleText": "登录"
+        "navigationBarTitleText": "学生心理评估",
+        "navigationBarBackgroundColor": "#FFFFFF",
+        "navigationBarTextStyle": "black"
       }
     },
     {
       "path": "pages/activity/list",
       "style": {
-        "navigationBarTitleText": "我的活动"
+        "navigationBarTitleText": "我的评估活动",
+        "navigationBarBackgroundColor": "#FFFFFF",
+        "navigationBarTextStyle": "black",
+        "enablePullDownRefresh": true
       }
     },
     {
       "path": "pages/survey/fill",
       "style": {
-        "navigationBarTitleText": "填写问卷"
+        "navigationBarTitleText": "问卷作答",
+        "navigationBarBackgroundColor": "#FFFFFF",
+        "navigationBarTextStyle": "black"
       }
     },
     {
       "path": "pages/record/list",
       "style": {
-        "navigationBarTitleText": "我的记录"
+        "navigationBarTitleText": "我的提交记录",
+        "navigationBarBackgroundColor": "#FFFFFF",
+        "navigationBarTextStyle": "black",
+        "enablePullDownRefresh": true
       }
     },
     {
       "path": "pages/report/report",
       "style": {
-        "navigationBarTitleText": "评估报告"
+        "navigationBarTitleText": "评估报告",
+        "navigationBarBackgroundColor": "#FFFFFF",
+        "navigationBarTextStyle": "black"
       }
     }
   ],
   "globalStyle": {
     "navigationBarTextStyle": "black",
-    "navigationBarTitleText": "智慧心理健康评估",
-    "navigationBarBackgroundColor": "#ffffff",
-    "backgroundColor": "#f5f7fa"
+    "navigationBarTitleText": "学生心理评估",
+    "navigationBarBackgroundColor": "#FFFFFF",
+    "backgroundColor": "#F5F6F8"
   }
 }

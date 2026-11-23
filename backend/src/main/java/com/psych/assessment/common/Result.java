@@ -2,8 +2,10 @@ package com.psych.assessment.common;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;
+import lombok.NoArgsConstructor;
 
 @Data
+@NoArgsConstructor
 @AllArgsConstructor
 public class Result<T> {
 
@@ -21,5 +23,9 @@ public class Result<T> {
 
     public static <T> Result<T> fail(int code, String message) {
         return new Result<>(code, message, null);
+    }
+
+    public static <T> Result<T> fail(int code, String message, T data) {
+        return new Result<>(code, message, data);
     }
 }

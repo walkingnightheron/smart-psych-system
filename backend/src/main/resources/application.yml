@@ -1,5 +1,5 @@
 server:
-  port: 8080
+  port: ${SERVER_PORT:8080}
 
 spring:
   application:
@@ -7,6 +7,39 @@ spring:
   jackson:
     time-zone: Asia/Shanghai
     date-format: yyyy-MM-dd HH:mm:ss
+  datasource:
+    url: ${DB_URL:jdbc:mysql://localhost:3306/psych_assessment?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&characterEncoding=utf8}
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:}
+    driver-class-name: ${DB_DRIVER:com.mysql.cj.jdbc.Driver}
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 1500ms
+  rabbitmq:
+    host: ${RABBIT_HOST:localhost}
+    port: ${RABBIT_PORT:5672}
+    username: ${RABBIT_USERNAME:guest}
+    password: ${RABBIT_PASSWORD:guest}
+    listener:
+      simple:
+        auto-startup: ${app.mq.listener-auto-startup:true}
+        default-requeue-rejected: false
+
+app:
+  jwt:
+    secret: ${JWT_SECRET:psych-assessment-teaching-dev-jwt-secret-key-2026}
+    expire-hours: ${JWT_EXPIRE_HOURS:24}
+  cache:
+    mode: ${CACHE_MODE:redis-with-fallback}
+    ttl-seconds: ${CACHE_TTL_SECONDS:1800}
+  mq:
+    transport: ${MQ_TRANSPORT:rabbit}
+    listener-auto-startup: ${MQ_LISTENER_AUTO_STARTUP:true}
+  seed:
+    enabled: ${SEED_ENABLED:false}
 
 logging:
   level:
