@@ -1,0 +1,40 @@
+{
+  "pages": [
+    {
+      "path": "pages/login/login",
+      "style": {
+        "navigationBarTitleText": "登录"
+      }
+    },
+    {
+      "path": "pages/activity/list",
+      "style": {
+        "navigationBarTitleText": "我的活动"
+      }
+    },
+    {
+      "path": "pages/survey/fill",
+      "style": {
+        "navigationBarTitleText": "填写问卷"
+      }
+    },
+    {
+      "path": "pages/record/list",
+      "style": {
+        "navigationBarTitleText": "我的记录"
+      }
+    },
+    {
+      "path": "pages/report/report",
+      "style": {
+        "navigationBarTitleText": "评估报告"
+      }
+    }
+  ],
+  "globalStyle": {
+    "navigationBarTextStyle": "black",
+    "navigationBarTitleText": "智慧心理健康评估",
+    "navigationBarBackgroundColor": "#ffffff",
+    "backgroundColor": "#f5f7fa"
+  }
+}

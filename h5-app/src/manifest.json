@@ -1,0 +1,15 @@
+{
+  "name": "智慧心理健康评估",
+  "appid": "__UNI__PSY0001",
+  "description": "学生心理健康问卷评估 H5 端",
+  "versionName": "0.1.0",
+  "versionCode": "100",
+  "transformPx": false,
+  "vueVersion": "3",
+  "h5": {
+    "title": "智慧心理健康评估",
+    "router": {
+      "mode": "hash"
+    }
+  }
+}
