@@ -1,0 +1,51 @@
+# Java / Spring Boot
+target/
+build/
+out/
+*.class
+*.jar
+!**/gradle/wrapper/gradle-wrapper.jar
+*.war
+*.ear
+*.log
+hs_err_pid*
+
+# Node / Vue 3 / UniApp
+node_modules/
+dist/
+dist-ssr/
+unpackage/
+.hbuilderx/
+.npm/
+.pnpm-store/
+*.local
+
+# IDE
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 环境与密钥（禁止入库）
+.env
+.env.local
+.env.*.local
+application-local.yml
+application-local.properties
+*.pem
+*.key
+
+# 测试与覆盖率
+coverage/
+test-results/
