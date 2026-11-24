@@ -36,6 +36,12 @@ const router = createRouter({
           meta: { title: '评估活动管理' }
         },
         {
+          path: 'students',
+          name: 'students',
+          component: () => import('@/views/StudentsView.vue'),
+          meta: { title: '学生名册' }
+        },
+        {
           path: 'statistics',
           name: 'statistics',
           component: () => import('@/views/StatisticsView.vue'),

@@ -1,0 +1,89 @@
+erDiagram
+    direction LR
+
+    SYS_USER {
+        BIGINT id PK
+        VARCHAR username UK
+        VARCHAR real_name
+        VARCHAR role
+        VARCHAR dept_class
+    }
+
+    QUESTIONNAIRE_VERSION {
+        BIGINT id PK
+        INT version_num
+        VARCHAR rule_version
+        JSON questions_snapshot
+        JSON scoring_rule_snapshot
+    }
+
+    ASSESSMENT_ACTIVITY {
+        BIGINT id PK
+        VARCHAR title
+        BIGINT questionnaire_version_id FK
+        VARCHAR status
+        DATETIME start_time
+        DATETIME end_time
+        BIGINT owner_id FK
+        JSON authorized_admin_ids
+        DATETIME created_at
+        DATETIME updated_at
+    }
+
+    ACTIVITY_PARTICIPANT {
+        BIGINT id PK
+        BIGINT activity_id FK
+        BIGINT user_id FK
+        DATETIME created_at
+    }
+
+    ANSWER_SHEET {
+        BIGINT id PK
+        BIGINT activity_id FK
+        BIGINT questionnaire_version_id FK
+        BIGINT user_id FK
+        DATETIME submitted_at
+    }
+
+    ANSWER_ITEM {
+        BIGINT id PK
+        BIGINT sheet_id FK
+        INT question_no
+        VARCHAR selected_opt_code
+        DECIMAL raw_score
+        VARCHAR dimension_code
+    }
+
+    ASSESSMENT_REPORT {
+        BIGINT id PK
+        BIGINT sheet_id FK
+        BIGINT activity_id FK
+        BIGINT user_id FK
+        BIGINT questionnaire_version_id FK
+        VARCHAR rule_version
+        VARCHAR task_status
+        DECIMAL total_score
+        JSON dimension_scores_json
+        VARCHAR level_code
+        VARCHAR level_name
+        TEXT feedback_text
+        INT retry_count
+        INT max_retries
+        VARCHAR last_error
+        DATETIME generated_at
+        DATETIME created_at
+        DATETIME updated_at
+    }
+
+    SYS_USER ||--o{ ASSESSMENT_ACTIVITY : "owner_id"
+    SYS_USER ||--o{ ACTIVITY_PARTICIPANT : "user_id"
+    SYS_USER ||--o{ ANSWER_SHEET : "user_id"
+    SYS_USER ||--o{ ASSESSMENT_REPORT : "user_id"
+    QUESTIONNAIRE_VERSION ||--o{ ASSESSMENT_ACTIVITY : "绑定发布版本"
+    QUESTIONNAIRE_VERSION ||--o{ ANSWER_SHEET : "作答版本"
+    QUESTIONNAIRE_VERSION ||--o{ ASSESSMENT_REPORT : "版本追溯"
+    ASSESSMENT_ACTIVITY ||--o{ ACTIVITY_PARTICIPANT : "uk(activity_id,user_id)"
+    ASSESSMENT_ACTIVITY ||--o{ ANSWER_SHEET : "uk(activity_id,user_id)"
+    ASSESSMENT_ACTIVITY ||--o{ ASSESSMENT_REPORT : "activity_id"
+    ANSWER_SHEET ||--|{ ANSWER_ITEM : "uk(sheet_id,question_no)"
+    ANSWER_SHEET ||--o| ASSESSMENT_REPORT : "sheet_id 唯一 1:1"

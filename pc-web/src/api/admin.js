@@ -1,4 +1,4 @@
-import request from './request'
+import request, { downloadBlob } from './request'
 
 // ==================== 认证与个人资料 (REQ01) ====================
 export function loginApi(payload) {
@@ -108,5 +108,134 @@ export function retryAdminReportApi(reportId, reset = false, config = {}) {
       ...config,
       params: reset ? { reset: true } : undefined
     }
+  )
+}
+
+// ==================== 学生名册与 XLSX 导入/导出 (Section 7) ====================
+export function downloadQuestionnaireTemplateApi() {
+  return downloadBlob('/admin/templates/questionnaire.xlsx', '心理测评问卷导入模板.xlsx')
+}
+
+export function downloadStudentsTemplateApi() {
+  return downloadBlob('/admin/templates/students.xlsx', '学生名单导入模板.xlsx')
+}
+
+export function parseQuestionnaireXlsxApi(file) {
+  let formData
+  if (file instanceof FormData) {
+    formData = file
+  } else {
+    formData = new FormData()
+    formData.append('file', file)
+  }
+  return request.post('/admin/questionnaires/import/parse', formData)
+}
+
+export function importQuestionnaireXlsxApi(formDataOrPayload) {
+  let formData = formDataOrPayload
+  if (!(formDataOrPayload instanceof FormData)) {
+    formData = new FormData()
+    if (formDataOrPayload?.file) {
+      formData.append('file', formDataOrPayload.file)
+    }
+    if (formDataOrPayload?.code !== undefined && formDataOrPayload?.code !== null) {
+      formData.append('code', String(formDataOrPayload.code))
+    }
+    if (formDataOrPayload?.title !== undefined && formDataOrPayload?.title !== null) {
+      formData.append('title', String(formDataOrPayload.title))
+    }
+    if (formDataOrPayload?.description) {
+      formData.append('description', String(formDataOrPayload.description))
+    }
+    if (formDataOrPayload?.formula) {
+      formData.append('formula', String(formDataOrPayload.formula))
+    }
+    if (
+      formDataOrPayload?.reverseMaxPlusMin !== undefined &&
+      formDataOrPayload?.reverseMaxPlusMin !== null &&
+      formDataOrPayload?.reverseMaxPlusMin !== ''
+    ) {
+      formData.append('reverseMaxPlusMin', String(formDataOrPayload.reverseMaxPlusMin))
+    }
+    if (formDataOrPayload?.ruleVersion) {
+      formData.append('ruleVersion', String(formDataOrPayload.ruleVersion))
+    }
+  }
+  return request.post('/admin/questionnaires/import', formData)
+}
+
+export function getStudentsApi(params = {}) {
+  const cleanParams = {}
+  if (params?.keyword && String(params.keyword).trim()) {
+    cleanParams.keyword = String(params.keyword).trim()
+  }
+  if (params?.deptClass && String(params.deptClass).trim()) {
+    cleanParams.deptClass = String(params.deptClass).trim()
+  }
+  return request.get('/admin/students', {
+    params: Object.keys(cleanParams).length > 0 ? cleanParams : undefined
+  })
+}
+
+export function createStudentApi(data) {
+  return request.post('/admin/students', data)
+}
+
+export function updateStudentApi(id, data) {
+  return request.put(`/admin/students/${id}`, data)
+}
+
+export function updateStudentStatusApi(id, status) {
+  const payload =
+    status && typeof status === 'object' && 'status' in status ? status : { status }
+  return request.put(`/admin/students/${id}/status`, payload)
+}
+
+export function resetStudentPasswordApi(id, password = '') {
+  const payload =
+    password && typeof password === 'object' && 'password' in password
+      ? password
+      : { password: password ?? '' }
+  return request.post(`/admin/students/${id}/reset-password`, payload)
+}
+
+export function deleteStudentApi(id, config = {}) {
+  return request.delete(`/admin/students/${id}`, config)
+}
+
+export function importStudentsXlsxApi(file, updateExisting = false) {
+  let formData
+  if (file instanceof FormData) {
+    formData = file
+  } else {
+    formData = new FormData()
+    formData.append('file', file)
+    formData.append('updateExisting', String(Boolean(updateExisting)))
+  }
+  return request.post('/admin/users/import-students', formData)
+}
+
+export function importActivityParticipantsXlsxApi(
+  activityId,
+  file,
+  mode = 'APPEND',
+  autoCreateMissing = true
+) {
+  let formData
+  if (file instanceof FormData) {
+    formData = file
+  } else {
+    formData = new FormData()
+    formData.append('file', file)
+    formData.append('mode', mode || 'APPEND')
+    formData.append('autoCreateMissing', String(Boolean(autoCreateMissing)))
+  }
+  return request.post(`/admin/activities/${activityId}/participants/import`, formData)
+}
+
+export function exportActivityStatisticsXlsxApi(activityId) {
+  return downloadBlob(
+    `/admin/activities/${activityId}/statistics/export.xlsx`,
+    `评估活动统计报表_${activityId}.xlsx`
   )
 }

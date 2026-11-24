@@ -6,6 +6,7 @@ import {
   Odometer,
   Document,
   Calendar,
+  User,
   DataAnalysis,
   ArrowDown,
   SwitchButton,
@@ -111,6 +112,10 @@ function handleUserCommand(cmd) {
         <el-menu-item index="/activities">
           <el-icon><Calendar /></el-icon>
           <span>评估活动管理</span>
+        </el-menu-item>
+        <el-menu-item index="/students">
+          <el-icon><User /></el-icon>
+          <span>学生名册</span>
         </el-menu-item>
         <el-menu-item index="/statistics">
           <el-icon><DataAnalysis /></el-icon>

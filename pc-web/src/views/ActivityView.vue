@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus } from '@element-plus/icons-vue'
+import { Plus, Upload } from '@element-plus/icons-vue'
 import {
   getActivitiesApi,
   getActivityDetailApi,
@@ -12,8 +12,11 @@ import {
   publishActivityApi,
   closeActivityApi,
   getAllPublishedVersionsApi,
-  getUsersApi
+  getUsersApi,
+  downloadStudentsTemplateApi,
+  importActivityParticipantsXlsxApi
 } from '@/api/admin'
+import { extractImportErrors } from '@/api/request'
 import { useUserStore } from '@/stores/user'
 
 const router = useRouter()
@@ -379,6 +382,112 @@ async function openDetailDrawer(row) {
   }
 }
 
+// ==================== 导入目标名单 XLSX 弹窗 ====================
+const rosterImportDialogVisible = ref(false)
+const rosterImporting = ref(false)
+const rosterTemplateDownloading = ref(false)
+const rosterUploadRef = ref(null)
+const rosterImportTarget = ref(null)
+const rosterImportFile = ref(null)
+const rosterImportMode = ref('APPEND')
+const rosterAutoCreateMissing = ref(true)
+const rosterImportResult = ref(null)
+const rosterImportErrorMessage = ref('')
+const rosterImportErrors = ref([])
+
+function openRosterImportDialog(row) {
+  rosterImportTarget.value = row
+  rosterImportFile.value = null
+  rosterImportMode.value = 'APPEND'
+  rosterAutoCreateMissing.value = true
+  rosterImportResult.value = null
+  rosterImportErrorMessage.value = ''
+  rosterImportErrors.value = []
+  rosterImportDialogVisible.value = true
+}
+
+function handleRosterFileChange(uploadFile) {
+  rosterImportFile.value = uploadFile?.raw || null
+  rosterImportResult.value = null
+  rosterImportErrorMessage.value = ''
+  rosterImportErrors.value = []
+}
+
+function handleRosterFileRemove() {
+  rosterImportFile.value = null
+}
+
+function handleRosterFileExceed(files) {
+  if (!rosterUploadRef.value || !files?.length) return
+  rosterUploadRef.value.clearFiles()
+  const rawFile = files[0]
+  rosterUploadRef.value.handleStart(rawFile)
+  rosterImportFile.value = rawFile
+  rosterImportResult.value = null
+  rosterImportErrorMessage.value = ''
+  rosterImportErrors.value = []
+}
+
+async function handleDownloadRosterTemplate() {
+  rosterTemplateDownloading.value = true
+  try {
+    await downloadStudentsTemplateApi()
+    ElMessage.success('活动目标名单模板已开始下载')
+  } finally {
+    rosterTemplateDownloading.value = false
+  }
+}
+
+async function submitRosterImport() {
+  if (!rosterImportTarget.value?.id) return
+  if (!rosterImportFile.value) {
+    ElMessage.warning('请选择要上传的名单 .xlsx 文件')
+    return
+  }
+  const fileName = String(rosterImportFile.value.name || '').toLowerCase()
+  if (!fileName.endsWith('.xlsx')) {
+    ElMessage.warning('仅支持上传 .xlsx 格式文件')
+    return
+  }
+
+  rosterImporting.value = true
+  rosterImportResult.value = null
+  rosterImportErrorMessage.value = ''
+  rosterImportErrors.value = []
+  try {
+    const res = await importActivityParticipantsXlsxApi(
+      rosterImportTarget.value.id,
+      rosterImportFile.value,
+      rosterImportMode.value,
+      rosterAutoCreateMissing.value
+    )
+    const data = res?.data ?? res ?? {}
+    rosterImportResult.value = {
+      totalRows: data.totalRows ?? 0,
+      createdUserCount: data.createdUserCount ?? 0,
+      addedCount: data.addedCount ?? 0,
+      alreadyInRosterCount: data.alreadyInRosterCount ?? 0,
+      currentParticipantCount: data.currentParticipantCount ?? 0,
+      passwordRuleHint:
+        data.passwordRuleHint || '自动新建学生的初始密码为学号后6位（不足6位取完整学号）'
+    }
+    ElMessage.success('活动目标名单导入完成')
+    await Promise.all([loadActivities(), ensureReferenceData()])
+    if (
+      detailDrawerVisible.value &&
+      Number(activityDetail.value?.id) === Number(rosterImportTarget.value.id)
+    ) {
+      await openDetailDrawer(rosterImportTarget.value)
+    }
+  } catch (err) {
+    rosterImportErrorMessage.value =
+      err?.response?.data?.message || err?.message || 'XLSX 名单校验未通过，请修正后重新上传'
+    rosterImportErrors.value = extractImportErrors(err)
+  } finally {
+    rosterImporting.value = false
+  }
+}
+
 onMounted(async () => {
   await Promise.all([loadActivities(), ensureReferenceData()])
 })
@@ -469,7 +578,7 @@ onMounted(async () => {
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="240" fixed="right" align="right">
+        <el-table-column label="操作" width="290" fixed="right" align="right">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="openDetailDrawer(row)">
               详情
@@ -482,6 +591,15 @@ onMounted(async () => {
               @click="openEditDialog(row)"
             >
               编辑草稿
+            </el-button>
+            <el-button
+              v-if="row.status === 'DRAFT'"
+              link
+              type="primary"
+              size="small"
+              @click="openRosterImportDialog(row)"
+            >
+              导入名单
             </el-button>
             <el-button
               v-if="row.status === 'DRAFT'"
@@ -643,6 +761,18 @@ onMounted(async () => {
     >
       <div v-loading="detailLoading" class="detail-body">
         <template v-if="activityDetail">
+          <div v-if="activityDetail.status === 'DRAFT'" class="detail-draft-bar">
+            <span>当前活动处于草稿态，可通过 XLSX 批量追加或替换参与学生名单</span>
+            <el-button
+              type="primary"
+              size="small"
+              :icon="Upload"
+              @click="openRosterImportDialog(activityDetail)"
+            >
+              导入名单 XLSX
+            </el-button>
+          </div>
+
           <el-descriptions :column="2" border size="small">
             <el-descriptions-item label="活动编号">
               <span class="mono-code">#{{ activityDetail.id }}</span>
@@ -701,17 +831,27 @@ onMounted(async () => {
 
           <div class="drawer-sec-title">
             <span class="tabular-nums">目标参与学生名单（共 {{ detailParticipants.length }} 人）</span>
-            <el-button
-              size="small"
-              type="primary"
-              plain
-              @click="
-                detailDrawerVisible = false;
-                router.push({ path: '/statistics', query: { activityId: activityDetail.id } })
-              "
-            >
-              查看统计与报告
-            </el-button>
+            <div class="drawer-sec-actions">
+              <el-button
+                v-if="activityDetail.status === 'DRAFT'"
+                size="small"
+                :icon="Upload"
+                @click="openRosterImportDialog(activityDetail)"
+              >
+                导入名单 XLSX
+              </el-button>
+              <el-button
+                size="small"
+                type="primary"
+                plain
+                @click="
+                  detailDrawerVisible = false;
+                  router.push({ path: '/statistics', query: { activityId: activityDetail.id } })
+                "
+              >
+                查看统计与报告
+              </el-button>
+            </div>
           </div>
 
           <el-table :data="detailParticipants" size="small" border>
@@ -746,6 +886,128 @@ onMounted(async () => {
         </template>
       </div>
     </el-drawer>
+
+    <!-- 导入目标名单 XLSX 弹窗 -->
+    <el-dialog
+      v-model="rosterImportDialogVisible"
+      :title="`导入目标名单 XLSX · ${rosterImportTarget?.title || ''}`"
+      width="620px"
+      destroy-on-close
+    >
+      <div class="roster-import-tip">
+        <span>
+          上传 <span class="mono-code">.xlsx</span> 学生名单文件（列含学号、姓名、学院班级、手机号），仅草稿态（DRAFT）活动允许修改名单。
+        </span>
+        <el-button
+          link
+          type="primary"
+          size="small"
+          :loading="rosterTemplateDownloading"
+          @click="handleDownloadRosterTemplate"
+        >
+          下载名单模板
+        </el-button>
+      </div>
+
+      <el-form label-position="top">
+        <el-form-item label="选择目标名单文件 (.xlsx)" required>
+          <el-upload
+            ref="rosterUploadRef"
+            action="#"
+            accept=".xlsx"
+            :auto-upload="false"
+            :limit="1"
+            :on-change="handleRosterFileChange"
+            :on-remove="handleRosterFileRemove"
+            :on-exceed="handleRosterFileExceed"
+          >
+            <el-button :icon="Upload">选择 .xlsx 文件</el-button>
+          </el-upload>
+        </el-form-item>
+
+        <el-form-item label="名单写入模式 (mode)">
+          <el-radio-group v-model="rosterImportMode">
+            <el-radio value="APPEND">APPEND · 追加去重（保留原名单，默认）</el-radio>
+            <el-radio value="REPLACE">REPLACE · 覆盖当前草稿名单</el-radio>
+          </el-radio-group>
+        </el-form-item>
+
+        <el-form-item>
+          <div class="auto-create-switch-row">
+            <el-switch v-model="rosterAutoCreateMissing" />
+            <span>自动为文件中不存在的新学号创建学生账号（初始密码为学号后 6 位）</span>
+          </div>
+        </el-form-item>
+      </el-form>
+
+      <!-- 导入汇总卡片 -->
+      <div v-if="rosterImportResult" class="roster-result-card">
+        <div class="roster-res-title">目标名单导入汇总</div>
+        <div class="roster-metrics-grid tabular-nums">
+          <div class="roster-metric-cell">
+            <span class="rm-label">导入行数</span>
+            <strong class="rm-val">{{ rosterImportResult.totalRows }}</strong>
+          </div>
+          <div class="roster-metric-cell">
+            <span class="rm-label">新创建学生账号</span>
+            <strong class="rm-val primary">{{ rosterImportResult.createdUserCount }}</strong>
+          </div>
+          <div class="roster-metric-cell">
+            <span class="rm-label">新增入名单</span>
+            <strong class="rm-val primary">{{ rosterImportResult.addedCount }}</strong>
+          </div>
+          <div class="roster-metric-cell">
+            <span class="rm-label">已在名单去重</span>
+            <strong class="rm-val muted">{{ rosterImportResult.alreadyInRosterCount }}</strong>
+          </div>
+          <div class="roster-metric-cell">
+            <span class="rm-label">当前名单总人数</span>
+            <strong class="rm-val">{{ rosterImportResult.currentParticipantCount }}</strong>
+          </div>
+        </div>
+        <div class="roster-pwd-note">
+          {{ rosterImportResult.passwordRuleHint }}
+        </div>
+      </div>
+
+      <!-- 400 结构化行级错误表 -->
+      <div
+        v-if="rosterImportErrorMessage || rosterImportErrors.length"
+        class="roster-error-box"
+      >
+        <div class="roster-err-title">{{ rosterImportErrorMessage }}</div>
+        <el-table
+          v-if="rosterImportErrors.length"
+          :data="rosterImportErrors"
+          size="small"
+          border
+          max-height="220"
+        >
+          <el-table-column prop="sheet" label="Sheet" width="110" />
+          <el-table-column prop="row" label="行号" width="70" align="center">
+            <template #default="{ row }">
+              <span class="tabular-nums">{{ row.row ?? '-' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="column" label="列名" width="120" />
+          <el-table-column prop="message" label="错误原因" min-width="190" />
+        </el-table>
+      </div>
+
+      <template #footer>
+        <el-button @click="rosterImportDialogVisible = false">
+          {{ rosterImportResult ? '关闭' : '取消' }}
+        </el-button>
+        <el-button
+          type="primary"
+          :loading="rosterImporting"
+          :disabled="!rosterImportFile"
+          @click="submitRosterImport"
+        >
+          开始导入
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -853,5 +1115,119 @@ onMounted(async () => {
 .time-cell {
   font-size: 12px;
   color: #6B7280;
+}
+
+.detail-draft-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  border-radius: 6px;
+  background-color: #F9FAFB;
+  border: 1px solid #E5E7EB;
+  font-size: 12.5px;
+  color: #4B5563;
+}
+
+.drawer-sec-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.roster-import-tip {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  border-radius: 6px;
+  background-color: #F9FAFB;
+  border: 1px solid #E5E7EB;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: #4B5563;
+}
+
+.auto-create-switch-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: #111827;
+}
+
+.roster-result-card {
+  margin-top: 8px;
+  padding: 14px 16px;
+  border-radius: 6px;
+  background-color: #F9FAFB;
+  border: 1px solid #D0DDF0;
+}
+
+.roster-res-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #2055A4;
+  margin-bottom: 10px;
+}
+
+.roster-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 8px;
+}
+
+.roster-metric-cell {
+  padding: 8px 10px;
+  border-radius: 4px;
+  background-color: #FFFFFF;
+  border: 1px solid #E5E7EB;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.rm-label {
+  font-size: 11.5px;
+  color: #6B7280;
+}
+
+.rm-val {
+  font-size: 17px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.rm-val.primary {
+  color: #2055A4;
+}
+
+.rm-val.muted {
+  color: #6B7280;
+}
+
+.roster-pwd-note {
+  margin-top: 10px;
+  font-size: 12px;
+  color: #4B5563;
+}
+
+.roster-error-box {
+  margin-top: 10px;
+  padding: 12px;
+  border-radius: 6px;
+  background-color: #FEF2F2;
+  border: 1px solid #FECACA;
+}
+
+.roster-err-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #DC2626;
+  margin-bottom: 8px;
 }
 </style>

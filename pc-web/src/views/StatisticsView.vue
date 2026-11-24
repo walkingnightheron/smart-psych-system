@@ -2,12 +2,14 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Download } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 import {
   getActivitiesApi,
   getActivityStatisticsApi,
   getAdminReportDetailApi,
-  retryAdminReportApi
+  retryAdminReportApi,
+  exportActivityStatisticsXlsxApi
 } from '@/api/admin'
 
 const route = useRoute()
@@ -15,6 +17,7 @@ const router = useRouter()
 
 const activitiesLoading = ref(false)
 const statsLoading = ref(false)
+const exporting = ref(false)
 const activities = ref([])
 const selectedActivityId = ref(null)
 const statsData = ref(null)
@@ -346,6 +349,17 @@ function getTaskStatusTag(status) {
   return { label: '未提交', type: 'info' }
 }
 
+async function handleExportXlsx() {
+  if (!selectedActivityId.value) return
+  exporting.value = true
+  try {
+    await exportActivityStatisticsXlsxApi(selectedActivityId.value)
+    ElMessage.success('活动评估统计报表已开始下载')
+  } finally {
+    exporting.value = false
+  }
+}
+
 watch(levelChartMode, () => renderLevelChart())
 watch(dimChartMode, () => renderDimensionChart())
 watch(
@@ -405,6 +419,15 @@ onBeforeUnmount(() => {
           @click="loadStatistics(selectedActivityId)"
         >
           刷新
+        </el-button>
+        <el-button
+          type="primary"
+          :icon="Download"
+          :disabled="!selectedActivityId"
+          :loading="exporting"
+          @click="handleExportXlsx"
+        >
+          导出结果 XLSX
         </el-button>
       </div>
     </div>

@@ -11,7 +11,9 @@ import org.springframework.stereotype.Repository;
 import java.sql.PreparedStatement;
 import java.time.LocalDateTime;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
@@ -68,6 +70,18 @@ public class AnswerSheetRepository {
         );
     }
 
+    /**
+     * 统计单个学生的历史答卷数（契约 7.4 删除保护红线）。
+     */
+    public long countByUserId(Long userId) {
+        Long cnt = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM answer_sheet WHERE user_id = ?",
+                Long.class,
+                userId
+        );
+        return cnt == null ? 0L : cnt;
+    }
+
     public List<AnswerSheet> findByActivityId(Long activityId) {
         return jdbcTemplate.query(
                 "SELECT * FROM answer_sheet WHERE activity_id = ? ORDER BY id ASC",
@@ -96,5 +110,28 @@ public class AnswerSheetRepository {
                 activityIds.toArray()
         );
         return cnt == null ? 0L : cnt;
+    }
+
+    /**
+     * 批量统计一组学生各自提交的答卷数（学生名册 submittedSheetCount）。
+     */
+    public Map<Long, Long> countGroupByUserIds(Collection<Long> userIds) {
+        Map<Long, Long> result = new HashMap<>();
+        if (userIds == null || userIds.isEmpty()) {
+            return result;
+        }
+        String placeholders = userIds.stream().map(x -> "?").collect(Collectors.joining(","));
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                "SELECT user_id, COUNT(*) AS cnt FROM answer_sheet WHERE user_id IN (" + placeholders + ") GROUP BY user_id",
+                userIds.toArray()
+        );
+        for (Map<String, Object> row : rows) {
+            Object userId = row.get("user_id");
+            Object cnt = row.get("cnt");
+            if (userId != null && cnt != null) {
+                result.put(((Number) userId).longValue(), ((Number) cnt).longValue());
+            }
+        }
+        return result;
     }
 }

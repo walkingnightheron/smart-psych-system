@@ -51,3 +51,10 @@ opencode.json
 # 测试与覆盖率
 coverage/
 test-results/
+
+# 一键启停脚本运行产物
+logs/
+.run/
+
+# opencode 会话导出（非交付物）
+session-*.md

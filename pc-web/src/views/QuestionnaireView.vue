@@ -5,7 +5,9 @@ import {
   Plus,
   Delete,
   Top,
-  Bottom
+  Bottom,
+  Download,
+  Upload
 } from '@element-plus/icons-vue'
 import {
   getQuestionnairesApi,
@@ -14,8 +16,12 @@ import {
   updateQuestionnaireApi,
   publishQuestionnaireApi,
   getQuestionnaireVersionsByQidApi,
-  getQuestionnaireVersionSnapshotApi
+  getQuestionnaireVersionSnapshotApi,
+  downloadQuestionnaireTemplateApi,
+  parseQuestionnaireXlsxApi,
+  importQuestionnaireXlsxApi
 } from '@/api/admin'
+import { extractImportErrors } from '@/api/request'
 
 const loading = ref(false)
 const questionnaires = ref([])
@@ -575,6 +581,258 @@ async function inspectSnapshot(versionId) {
   }
 }
 
+// ==================== 题库模板下载与 XLSX 导入 ====================
+const templateDownloading = ref(false)
+
+async function handleDownloadTemplate() {
+  templateDownloading.value = true
+  try {
+    await downloadQuestionnaireTemplateApi()
+    ElMessage.success('题库导入模板已开始下载')
+  } finally {
+    templateDownloading.value = false
+  }
+}
+
+// 1) 导入 XLSX 新建问卷弹窗
+const importQDialogVisible = ref(false)
+const importQSaving = ref(false)
+const importQUploadRef = ref(null)
+const importQFile = ref(null)
+const importQErrorMessage = ref('')
+const importQErrors = ref([])
+
+const importQForm = reactive({
+  code: '',
+  title: '',
+  description: '',
+  formula: 'SUM',
+  reverseMaxPlusMin: null,
+  ruleVersion: 'R-2026.1'
+})
+
+function openImportQuestionnaireDialog() {
+  const suffix = String(Date.now()).slice(-4)
+  importQForm.code = `PSYCH_XLSX_${suffix}`
+  importQForm.title = ''
+  importQForm.description = ''
+  importQForm.formula = 'SUM'
+  importQForm.reverseMaxPlusMin = null
+  importQForm.ruleVersion = 'R-2026.1'
+  importQFile.value = null
+  importQErrorMessage.value = ''
+  importQErrors.value = []
+  importQDialogVisible.value = true
+}
+
+function handleImportQFileChange(uploadFile) {
+  importQFile.value = uploadFile?.raw || null
+  importQErrorMessage.value = ''
+  importQErrors.value = []
+}
+
+function handleImportQFileRemove() {
+  importQFile.value = null
+}
+
+function handleImportQFileExceed(files) {
+  if (!importQUploadRef.value || !files?.length) return
+  importQUploadRef.value.clearFiles()
+  const rawFile = files[0]
+  importQUploadRef.value.handleStart(rawFile)
+  importQFile.value = rawFile
+  importQErrorMessage.value = ''
+  importQErrors.value = []
+}
+
+async function submitImportQuestionnaire() {
+  if (!importQForm.code.trim()) {
+    ElMessage.warning('请填写问卷唯一编码（code）')
+    return
+  }
+  if (!importQForm.title.trim()) {
+    ElMessage.warning('请填写问卷标题（title）')
+    return
+  }
+  if (!importQFile.value) {
+    ElMessage.warning('请选择要上传的题库 .xlsx 文件')
+    return
+  }
+  const fileName = String(importQFile.value.name || '').toLowerCase()
+  if (!fileName.endsWith('.xlsx')) {
+    ElMessage.warning('仅支持上传 .xlsx 格式文件')
+    return
+  }
+
+  const formData = new FormData()
+  formData.append('file', importQFile.value)
+  formData.append('code', importQForm.code.trim())
+  formData.append('title', importQForm.title.trim())
+  if (importQForm.description.trim()) {
+    formData.append('description', importQForm.description.trim())
+  }
+  if (importQForm.formula) {
+    formData.append('formula', importQForm.formula)
+  }
+  if (
+    importQForm.reverseMaxPlusMin !== null &&
+    importQForm.reverseMaxPlusMin !== undefined &&
+    importQForm.reverseMaxPlusMin !== ''
+  ) {
+    formData.append('reverseMaxPlusMin', String(importQForm.reverseMaxPlusMin))
+  }
+  if (importQForm.ruleVersion.trim()) {
+    formData.append('ruleVersion', importQForm.ruleVersion.trim())
+  }
+
+  importQSaving.value = true
+  importQErrorMessage.value = ''
+  importQErrors.value = []
+  try {
+    await importQuestionnaireXlsxApi(formData)
+    ElMessage.success('已从 XLSX 导入并创建问卷草稿')
+    importQDialogVisible.value = false
+    await loadList()
+  } catch (err) {
+    importQErrorMessage.value =
+      err?.response?.data?.message || err?.message || 'XLSX 校验未通过，请修正后重新上传'
+    importQErrors.value = extractImportErrors(err)
+  } finally {
+    importQSaving.value = false
+  }
+}
+
+// 2) 草稿编辑抽屉内「从 XLSX 导入题目」弹窗
+const parseDialogVisible = ref(false)
+const parseLoading = ref(false)
+const parseUploadRef = ref(null)
+const parseFile = ref(null)
+const parseMode = ref('REPLACE')
+const syncScoringRule = ref(true)
+const parseErrorMessage = ref('')
+const parseErrors = ref([])
+
+function openParseQuestionsDialog() {
+  parseFile.value = null
+  parseMode.value = 'REPLACE'
+  syncScoringRule.value = true
+  parseErrorMessage.value = ''
+  parseErrors.value = []
+  parseDialogVisible.value = true
+}
+
+function handleParseFileChange(uploadFile) {
+  parseFile.value = uploadFile?.raw || null
+  parseErrorMessage.value = ''
+  parseErrors.value = []
+}
+
+function handleParseFileRemove() {
+  parseFile.value = null
+}
+
+function handleParseFileExceed(files) {
+  if (!parseUploadRef.value || !files?.length) return
+  parseUploadRef.value.clearFiles()
+  const rawFile = files[0]
+  parseUploadRef.value.handleStart(rawFile)
+  parseFile.value = rawFile
+  parseErrorMessage.value = ''
+  parseErrors.value = []
+}
+
+function normalizeParsedQuestion(q, idx) {
+  const opts = safeParseJson(q.options ?? q.optionsJson, [])
+  return {
+    questionNo: Number(q.questionNo ?? idx + 1),
+    stem: q.stem || '',
+    questionType: q.questionType || 'SINGLE',
+    dimensionCode: q.dimensionCode || 'DEFAULT',
+    isReverse: Number(q.isReverse ? 1 : 0),
+    required: q.required === 0 || q.required === false ? 0 : 1,
+    options:
+      Array.isArray(opts) && opts.length > 0
+        ? opts.map((o, oIdx) => ({
+            optCode: o.optCode || String.fromCharCode(65 + oIdx),
+            label: o.label || '',
+            score: Number(o.score ?? oIdx + 1),
+            sort: Number(o.sort ?? oIdx + 1)
+          }))
+        : createDefaultOptions()
+  }
+}
+
+async function submitParseQuestions() {
+  if (!parseFile.value) {
+    ElMessage.warning('请选择要解析的题库 .xlsx 文件')
+    return
+  }
+  const fileName = String(parseFile.value.name || '').toLowerCase()
+  if (!fileName.endsWith('.xlsx')) {
+    ElMessage.warning('仅支持上传 .xlsx 格式文件')
+    return
+  }
+
+  parseLoading.value = true
+  parseErrorMessage.value = ''
+  parseErrors.value = []
+  try {
+    const res = await parseQuestionnaireXlsxApi(parseFile.value)
+    const data = res?.data ?? res ?? {}
+    const rawQuestions = Array.isArray(data.questions) ? data.questions : []
+    const parsedQuestions = rawQuestions.map((q, idx) => normalizeParsedQuestion(q, idx))
+
+    if (parseMode.value === 'APPEND') {
+      draftForm.questions.push(...parsedQuestions)
+    } else {
+      draftForm.questions = parsedQuestions
+    }
+    renumberQuestions()
+
+    let ruleSynced = false
+    if (syncScoringRule.value && data.hasScoringRule && data.scoringRule) {
+      const rule = safeParseJson(data.scoringRule, {})
+      draftForm.scoringRule = {
+        ruleVersion: draftForm.scoringRule.ruleVersion || rule.ruleVersion || 'R-2026.1',
+        formula: draftForm.scoringRule.formula || rule.formula || 'SUM',
+        reverseMaxPlusMin: Number(
+          rule.reverseMaxPlusMin ?? draftForm.scoringRule.reverseMaxPlusMin ?? 5
+        ),
+        dimensions: Array.isArray(rule.dimensions)
+          ? rule.dimensions.map((d) => ({
+              code: d.code || '',
+              name: d.name || '',
+              formula: d.formula || 'SUM'
+            }))
+          : draftForm.scoringRule.dimensions,
+        levels: Array.isArray(rule.levels)
+          ? rule.levels.map((lv) => ({
+              code: lv.code || '',
+              name: lv.name || '',
+              min: Number(lv.min ?? 0),
+              max: Number(lv.max ?? 10),
+              minInclusive: lv.minInclusive !== false,
+              maxInclusive: lv.maxInclusive !== false,
+              advice: lv.advice || ''
+            }))
+          : draftForm.scoringRule.levels
+      }
+      ruleSynced = true
+    }
+
+    ElMessage.success(
+      `已解析回填 ${parsedQuestions.length} 道题目${ruleSynced ? '（已同步计分规则）' : ''}，请核对后点击保存草稿`
+    )
+    parseDialogVisible.value = false
+  } catch (err) {
+    parseErrorMessage.value =
+      err?.response?.data?.message || err?.message || 'XLSX 解析校验未通过，请修正后重新上传'
+    parseErrors.value = extractImportErrors(err)
+  } finally {
+    parseLoading.value = false
+  }
+}
+
 onMounted(() => {
   loadList()
 })
@@ -592,6 +850,16 @@ onMounted(() => {
       </div>
       <div class="toolbar-right">
         <el-button @click="loadList">刷新</el-button>
+        <el-button
+          :icon="Download"
+          :loading="templateDownloading"
+          @click="handleDownloadTemplate"
+        >
+          下载题库模板
+        </el-button>
+        <el-button :icon="Upload" @click="openImportQuestionnaireDialog">
+          导入 XLSX 新建问卷
+        </el-button>
         <el-button type="primary" :icon="Plus" @click="openCreateDrawer">
           新建问卷
         </el-button>
@@ -710,9 +978,14 @@ onMounted(() => {
               <span class="tab-hint">
                 反向计分题得分 = 反向计分基数 ({{ draftForm.scoringRule.reverseMaxPlusMin }}) - 选项原始分
               </span>
-              <el-button type="primary" size="small" :icon="Plus" @click="addQuestion">
-                新增题目
-              </el-button>
+              <div class="tab-toolbar-actions">
+                <el-button size="small" :icon="Upload" @click="openParseQuestionsDialog">
+                  从 XLSX 导入题目
+                </el-button>
+                <el-button type="primary" size="small" :icon="Plus" @click="addQuestion">
+                  新增题目
+                </el-button>
+              </div>
             </div>
 
             <div class="question-cards">
@@ -1168,6 +1441,206 @@ onMounted(() => {
         </div>
       </template>
     </el-drawer>
+
+    <!-- 导入 XLSX 新建问卷弹窗 -->
+    <el-dialog
+      v-model="importQDialogVisible"
+      title="导入 XLSX 新建问卷"
+      width="640px"
+      destroy-on-close
+    >
+      <div class="xlsx-tip-bar">
+        <span>
+          上传题库 <span class="mono-code">.xlsx</span> 文件（支持「题目列表」「维度配置」「计分与区间」三工作表），全量校验通过后直接创建问卷草稿。
+        </span>
+        <el-button
+          link
+          type="primary"
+          size="small"
+          :loading="templateDownloading"
+          @click="handleDownloadTemplate"
+        >
+          下载题库模板
+        </el-button>
+      </div>
+
+      <el-form label-position="top" class="import-q-grid">
+        <el-form-item label="问卷唯一编码 (code)" required>
+          <el-input
+            v-model="importQForm.code"
+            placeholder="如 CAMPUS_PSYCH_2026"
+            clearable
+          />
+        </el-form-item>
+
+        <el-form-item label="问卷标题 (title)" required>
+          <el-input
+            v-model="importQForm.title"
+            placeholder="请输入问卷完整标题"
+            maxlength="128"
+            clearable
+          />
+        </el-form-item>
+
+        <el-form-item label="问卷说明 (description)" class="span-2">
+          <el-input
+            v-model="importQForm.description"
+            type="textarea"
+            :rows="2"
+            placeholder="选填，向受测学生展示的指导语与说明"
+          />
+        </el-form-item>
+
+        <el-form-item label="总分汇总公式 (formula)">
+          <el-select v-model="importQForm.formula" style="width: 100%">
+            <el-option label="SUM · 各题得分求和" value="SUM" />
+            <el-option label="AVG · 各题得分均值" value="AVG" />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item label="反向计分基数 (选填，留空按选项分值自动推算)">
+          <el-input-number
+            v-model="importQForm.reverseMaxPlusMin"
+            :min="1"
+            :max="100"
+            placeholder="如 5"
+            style="width: 100%"
+          />
+        </el-form-item>
+
+        <el-form-item label="选择问卷题库文件 (.xlsx)" required class="span-2">
+          <el-upload
+            ref="importQUploadRef"
+            action="#"
+            accept=".xlsx"
+            :auto-upload="false"
+            :limit="1"
+            :on-change="handleImportQFileChange"
+            :on-remove="handleImportQFileRemove"
+            :on-exceed="handleImportQFileExceed"
+          >
+            <el-button :icon="Upload">选择 .xlsx 文件</el-button>
+          </el-upload>
+        </el-form-item>
+      </el-form>
+
+      <div v-if="importQErrorMessage || importQErrors.length" class="xlsx-err-box">
+        <div class="xlsx-err-title">{{ importQErrorMessage }}</div>
+        <el-table
+          v-if="importQErrors.length"
+          :data="importQErrors"
+          size="small"
+          border
+          max-height="220"
+        >
+          <el-table-column prop="sheet" label="Sheet" width="110" />
+          <el-table-column prop="row" label="行号" width="70" align="center">
+            <template #default="{ row }">
+              <span class="tabular-nums">{{ row.row ?? '-' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="column" label="列名" width="120" />
+          <el-table-column prop="message" label="错误原因" min-width="200" />
+        </el-table>
+      </div>
+
+      <template #footer>
+        <el-button @click="importQDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="importQSaving"
+          :disabled="!importQFile"
+          @click="submitImportQuestionnaire"
+        >
+          导入并创建草稿
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 草稿编辑器内：从 XLSX 解析回填题目小弹窗 -->
+    <el-dialog
+      v-model="parseDialogVisible"
+      title="从 XLSX 导入题目到编辑器"
+      width="560px"
+      destroy-on-close
+    >
+      <div class="xlsx-tip-bar">
+        <span>
+          解析 <span class="mono-code">.xlsx</span> 中的题目与计分规则并回填至当前编辑器表单，核对无误后再点击「保存草稿」落库。
+        </span>
+        <el-button
+          link
+          type="primary"
+          size="small"
+          :loading="templateDownloading"
+          @click="handleDownloadTemplate"
+        >
+          下载题库模板
+        </el-button>
+      </div>
+
+      <el-form label-position="top">
+        <el-form-item label="选择题库文件 (.xlsx)" required>
+          <el-upload
+            ref="parseUploadRef"
+            action="#"
+            accept=".xlsx"
+            :auto-upload="false"
+            :limit="1"
+            :on-change="handleParseFileChange"
+            :on-remove="handleParseFileRemove"
+            :on-exceed="handleParseFileExceed"
+          >
+            <el-button :icon="Upload">选择 .xlsx 文件</el-button>
+          </el-upload>
+        </el-form-item>
+
+        <el-form-item label="题目回填方式">
+          <el-radio-group v-model="parseMode">
+            <el-radio value="REPLACE">覆盖当前题目</el-radio>
+            <el-radio value="APPEND">追加到末尾（自动顺延题号）</el-radio>
+          </el-radio-group>
+        </el-form-item>
+
+        <el-form-item>
+          <el-checkbox v-model="syncScoringRule">
+            同步覆盖计分规则（当 XLSX 包含维度配置与结果区间 Sheet 时一并回填）
+          </el-checkbox>
+        </el-form-item>
+      </el-form>
+
+      <div v-if="parseErrorMessage || parseErrors.length" class="xlsx-err-box">
+        <div class="xlsx-err-title">{{ parseErrorMessage }}</div>
+        <el-table
+          v-if="parseErrors.length"
+          :data="parseErrors"
+          size="small"
+          border
+          max-height="220"
+        >
+          <el-table-column prop="sheet" label="Sheet" width="110" />
+          <el-table-column prop="row" label="行号" width="70" align="center">
+            <template #default="{ row }">
+              <span class="tabular-nums">{{ row.row ?? '-' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="column" label="列名" width="120" />
+          <el-table-column prop="message" label="错误原因" min-width="180" />
+        </el-table>
+      </div>
+
+      <template #footer>
+        <el-button @click="parseDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="parseLoading"
+          :disabled="!parseFile"
+          @click="submitParseQuestions"
+        >
+          解析并回填
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -1507,5 +1980,51 @@ onMounted(() => {
   border: 1px solid #E5E7EB;
   color: #111827;
   line-height: 1.5;
+}
+
+.tab-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.xlsx-tip-bar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  border-radius: 6px;
+  background-color: #F9FAFB;
+  border: 1px solid #E5E7EB;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: #4B5563;
+}
+
+.import-q-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 14px;
+}
+
+.import-q-grid .span-2 {
+  grid-column: span 2;
+}
+
+.xlsx-err-box {
+  margin-top: 8px;
+  padding: 12px;
+  border-radius: 6px;
+  background-color: #FEF2F2;
+  border: 1px solid #FECACA;
+}
+
+.xlsx-err-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #DC2626;
+  margin-bottom: 8px;
 }
 </style>

@@ -1,0 +1,83 @@
+erDiagram
+    direction TB
+
+    SYS_USER {
+        BIGINT id PK
+        VARCHAR username UK
+        VARCHAR real_name
+        VARCHAR role
+    }
+
+    QUESTIONNAIRE {
+        BIGINT id PK
+        VARCHAR code UK
+        BIGINT creator_id FK
+        INT latest_version
+    }
+
+    QUESTIONNAIRE_QUESTION {
+        BIGINT id PK
+        BIGINT questionnaire_id FK
+        INT question_no
+        JSON options_json
+    }
+
+    QUESTIONNAIRE_VERSION {
+        BIGINT id PK
+        BIGINT questionnaire_id FK
+        INT version_num
+        VARCHAR rule_version
+        JSON questions_snapshot
+        JSON scoring_rule_snapshot
+    }
+
+    ASSESSMENT_ACTIVITY {
+        BIGINT id PK
+        BIGINT questionnaire_version_id FK
+        BIGINT owner_id FK
+        VARCHAR status
+        DATETIME start_time
+        DATETIME end_time
+    }
+
+    ACTIVITY_PARTICIPANT {
+        BIGINT id PK
+        BIGINT activity_id FK
+        BIGINT user_id FK
+    }
+
+    ANSWER_SHEET {
+        BIGINT id PK
+        BIGINT activity_id FK
+        BIGINT questionnaire_version_id FK
+        BIGINT user_id FK
+        DATETIME submitted_at
+    }
+
+    ANSWER_ITEM {
+        BIGINT id PK
+        BIGINT sheet_id FK
+        INT question_no
+        DECIMAL raw_score
+    }
+
+    ASSESSMENT_REPORT {
+        BIGINT id PK
+        BIGINT sheet_id FK
+        BIGINT activity_id FK
+        VARCHAR task_status
+        DECIMAL total_score
+        VARCHAR level_code
+    }
+
+    SYS_USER ||--o{ QUESTIONNAIRE : "creator_id"
+    SYS_USER ||--o{ ASSESSMENT_ACTIVITY : "owner_id"
+    SYS_USER ||--o{ ANSWER_SHEET : "user_id"
+    QUESTIONNAIRE ||--o{ QUESTIONNAIRE_QUESTION : "题目"
+    QUESTIONNAIRE ||--o{ QUESTIONNAIRE_VERSION : "版本"
+    QUESTIONNAIRE_VERSION ||--o{ ASSESSMENT_ACTIVITY : "绑定"
+    ASSESSMENT_ACTIVITY ||--o{ ACTIVITY_PARTICIPANT : "名单"
+    ASSESSMENT_ACTIVITY ||--o{ ANSWER_SHEET : "答卷"
+    QUESTIONNAIRE_VERSION ||--o{ ANSWER_SHEET : "作答版本"
+    ANSWER_SHEET ||--|{ ANSWER_ITEM : "明细"
+    ANSWER_SHEET ||--o| ASSESSMENT_REPORT : "报告"

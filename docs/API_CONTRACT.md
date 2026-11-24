@@ -227,6 +227,119 @@ Authorization: Bearer <jwt_token>
 * `GET /api/admin/cache/metrics` — 查看 Redis/缓存命中数（`hitCount`）、回源数（`missCount`）、失效清理数（`evictCount`）、最近操作日志列表及当前缓存模式（Redis / 内存降级）。
 * `DELETE /api/admin/cache/evict` — 手动失效指定或全部热点缓存。
 
+### 7. 学生名册与 XLSX 导入/导出接口（批量能力增强，仅限 `ADMIN`）
+
+#### 7.1 统一 XLSX 校验错误结构（HTTP 400）
+当上传文件格式非法或任意行校验不通过时，数据库零写入，返回 HTTP 400：
+```json
+{
+  "code": 400,
+  "message": "XLSX校验未通过，共发现 2 处错误，请修正后重新上传",
+  "data": {
+    "errorCount": 2,
+    "errors": [
+      { "sheet": "题目列表", "row": 4, "column": "选项B分值", "message": "分值必须为0~100之间的数字" }
+    ]
+  }
+}
+```
+
+#### 7.2 标准模板下载
+* `GET /api/admin/templates/questionnaire.xlsx` — 下载标准题库/问卷 3-Sheet 导入模板（`题目列表`、`维度配置`、`计分与区间`，内置 6 题示例行）。
+* `GET /api/admin/templates/students.xlsx` — 下载标准学生名册/活动名单单 Sheet 模板（`学生名单`：`学号`、`姓名`、`学院班级`、`手机号`，内置示例行）。
+
+#### 7.3 题库 / 问卷草稿 XLSX 导入
+* `POST /api/admin/questionnaires/import/parse`（`multipart/form-data`，参数 `file`）
+  * 解析题库 `.xlsx`（不落库），用于编辑器回填题目或预览；仅含 `题目列表` Sheet 时只返回 `questions`，包含 `维度配置` 与 `计分与区间` 时同步返回完整 `scoringRule`。
+  * 响应 `data`：
+```json
+{
+  "questionCount": 6,
+  "hasScoringRule": true,
+  "questions": [ /* QuestionConfig[] */ ],
+  "scoringRule": { /* ScoringRuleConfig | null */ }
+}
+```
+* `POST /api/admin/questionnaires/import`（`multipart/form-data`）
+  * 表单参数：`file`（必填 `.xlsx`）、`code`（必填）、`title`（必填）、`description`（选填）、`formula`（选填，默认 `SUM`）、`reverseMaxPlusMin`（选填整数，缺省按题目选项自动推算）、`ruleVersion`（选填，默认 `R-draft`）。
+  * 全量解析并经过 `QuestionnaireValidator` 校验后，单事务创建问卷草稿（`latestVersion = 0`），响应 `data` 为 `QuestionnaireDetailVO`。
+
+#### 7.4 学生名册管理与 XLSX 批量导入
+* `GET /api/admin/students` — 查询学生名册（仅 `role = STUDENT`）
+  * 查询参数：`keyword`（可选，按学号/姓名/学院班级模糊匹配）、`deptClass`（可选，精确/模糊筛选班级）
+  * 响应 `data`：
+```json
+[
+  {
+    "id": 4,
+    "username": "20260001",
+    "realName": "苏晴（已交卷学生A）",
+    "deptClass": "软件2542班",
+    "phone": "13900000001",
+    "status": 1,
+    "createdAt": "2026-11-23 09:00:00",
+    "participatedActivityCount": 2,
+    "submittedSheetCount": 1
+  }
+]
+```
+* `POST /api/admin/students` — 新增单个学生账号
+  * 请求体：`{ "username": "20260199", "realName": "张同学", "deptClass": "软件2542班", "phone": "13900000199", "password": "" }`（`password` 留空则自动取学号后 6 位，不足 6 位取完整学号；`username` 全表唯一，与已有账号冲突返回 400）。
+  * 响应 `data`：`StudentRosterItemVO`。
+* `PUT /api/admin/students/{id}` — 修改学生信息（仅允许操作 `role = STUDENT`，尝试修改 `ADMIN` 返回 400）
+  * 请求体：`{ "realName": "新姓名", "deptClass": "新班级", "phone": "新手机号", "status": 1 }`（`status` 可选 `0` 禁用 / `1` 正常）。
+  * 响应 `data`：更新后的 `StudentRosterItemVO`。
+* `PUT /api/admin/students/{id}/status` — 启用 / 禁用学生账号（禁用后该学生持有的 Token 立即返回 401）
+  * 请求体：`{ "status": 0 }`（仅允许 `0` 或 `1`；禁止操作 `ADMIN`）。
+  * 响应 `data`：更新后的 `StudentRosterItemVO`。
+* `POST /api/admin/students/{id}/reset-password` — 重置学生密码（仅允许操作 `STUDENT`）
+  * 请求体（可选）：`{ "password": "" }`，留空则重置为**学号后 6 位**（不足 6 位取完整学号）；若自定义密码须长度 4~64。
+  * 响应 `data`：`{ "id": 4, "username": "20260001", "passwordRuleHint": "密码已重置为学号后6位（不足6位取完整学号）" }`。
+* `DELETE /api/admin/students/{id}` — 删除学生账号（数据完整性保护）
+  * 仅允许删除 `role = STUDENT`（尝试删除 `ADMIN` 返回 400）。
+  * **历史保护红线**：若该学生已有有效答卷记录（`answer_sheet > 0`），或已被纳入**已发布/已关闭**活动的目标名单，**拒绝物理删除并返回 HTTP 400**（提示改用「禁用账号」以保障历史报告与完成率分母完整）。
+  * 若仅未交卷且仅存在于草稿活动名单或未参与任何活动，在单事务内清理其在草稿活动中的 `activity_participant` 记录并物理删除该学生，同时失效对应草稿活动缓存。
+* `POST /api/admin/users/import-students`（`multipart/form-data`）
+  * 参数：`file`（必填 `.xlsx`）、`updateExisting`（可选 boolean，默认 `false`）。
+  * 新建学生账号规则：`role = STUDENT`，初始密码为 **学号（`username`）后 6 位**（不足 6 位取完整学号），BCrypt 加密存储。
+  * 若学号已存在且为 `ADMIN` 角色 → 报错拒绝（400）；文件内学号重复 → 报错定位（400）；已有 `STUDENT` 幂等跳过（`updateExisting=true` 时仅更新非空资料，不重置密码）。
+  * 响应 `data`：
+```json
+{
+  "totalRows": 20,
+  "createdCount": 18,
+  "updatedCount": 0,
+  "skippedCount": 2,
+  "passwordRuleHint": "新建学生初始密码为学号后6位（不足6位取完整学号）"
+}
+```
+
+#### 7.5 评估活动目标名单 XLSX 导入
+* `POST /api/admin/activities/{id}/participants/import`（`multipart/form-data`）
+  * 参数：`file`（必填 `.xlsx`）、`mode`（可选：`APPEND` 追加去重[默认] / `REPLACE` 全量替换）、`autoCreateMissing`（可选 boolean，默认 `true`，遇到不存在的学号自动创建 `STUDENT` 账号，初始密码取学号后 6 位，此时要求该行 `姓名` 非空）。
+  * 权限与状态约束：校验管理员活动数据范围（越权 **403**）；仅 `DRAFT` 状态允许导入修改名单（`PUBLISHED`/`CLOSED` 返回 **400**）；同步清理活动缓存。
+  * 响应 `data`：
+```json
+{
+  "activityId": 2,
+  "mode": "APPEND",
+  "totalRows": 10,
+  "createdUserCount": 6,
+  "addedCount": 8,
+  "alreadyInRosterCount": 2,
+  "currentParticipantCount": 10,
+  "passwordRuleHint": "自动新建学生的初始密码为学号后6位（不足6位取完整学号）"
+}
+```
+
+#### 7.6 评估结果统计 XLSX 导出 (REQ08 增强)
+* `GET /api/admin/activities/{id}/statistics/export.xlsx`
+  * 仅限 `ADMIN`，严格校验 `AccessControlService.checkAdminActivityAccess`（未授权管理员 **403**）。
+  * 返回 `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` 二进制流，含 3 个工作表：
+    1. `活动汇总与统计`：活动基本信息、完成数/完成率（`66.67%`）、报告三态数量、结果区间分布（仅含 `SUCCESS`）、各维度平均分。
+    2. `参与及评估结果明细`：名单内所有学生的提交状态、报告状态、总分、动态展开的各维度得分列、结果区间、反馈建议、重试次数与最近异常。
+    3. `作答选项明细`：全部有效答卷逐题选项编码与换算得分（`A(1.00)`），便于教学复核。
+
 ---
 
 ## 四、H5 参与端接口 (`/api/h5/**`，仅限 `STUDENT` 角色)

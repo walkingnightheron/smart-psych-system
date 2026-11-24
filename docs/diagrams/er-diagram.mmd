@@ -1,0 +1,127 @@
+erDiagram
+    direction LR
+
+    SYS_USER {
+        BIGINT id PK
+        VARCHAR username UK
+        VARCHAR password_hash
+        VARCHAR real_name
+        VARCHAR role
+        VARCHAR dept_class
+        VARCHAR phone
+        TINYINT status
+        DATETIME created_at
+        DATETIME updated_at
+    }
+
+    QUESTIONNAIRE {
+        BIGINT id PK
+        VARCHAR code UK
+        VARCHAR title
+        TEXT description
+        JSON scoring_rule_json
+        INT latest_version
+        BIGINT creator_id FK
+        DATETIME created_at
+        DATETIME updated_at
+    }
+
+    QUESTIONNAIRE_QUESTION {
+        BIGINT id PK
+        BIGINT questionnaire_id FK
+        INT question_no
+        VARCHAR stem
+        VARCHAR question_type
+        VARCHAR dimension_code
+        TINYINT is_reverse
+        TINYINT required
+        JSON options_json
+    }
+
+    QUESTIONNAIRE_VERSION {
+        BIGINT id PK
+        BIGINT questionnaire_id FK
+        INT version_num
+        VARCHAR rule_version
+        VARCHAR title
+        TEXT description
+        JSON questions_snapshot
+        JSON scoring_rule_snapshot
+        BIGINT published_by FK
+        DATETIME published_at
+    }
+
+    ASSESSMENT_ACTIVITY {
+        BIGINT id PK
+        VARCHAR title
+        BIGINT questionnaire_version_id FK
+        VARCHAR status
+        DATETIME start_time
+        DATETIME end_time
+        BIGINT owner_id FK
+        JSON authorized_admin_ids
+        DATETIME created_at
+        DATETIME updated_at
+    }
+
+    ACTIVITY_PARTICIPANT {
+        BIGINT id PK
+        BIGINT activity_id FK
+        BIGINT user_id FK
+        DATETIME created_at
+    }
+
+    ANSWER_SHEET {
+        BIGINT id PK
+        BIGINT activity_id FK
+        BIGINT questionnaire_version_id FK
+        BIGINT user_id FK
+        DATETIME submitted_at
+    }
+
+    ANSWER_ITEM {
+        BIGINT id PK
+        BIGINT sheet_id FK
+        INT question_no
+        VARCHAR selected_opt_code
+        DECIMAL raw_score
+        VARCHAR dimension_code
+    }
+
+    ASSESSMENT_REPORT {
+        BIGINT id PK
+        BIGINT sheet_id FK
+        BIGINT activity_id FK
+        BIGINT user_id FK
+        BIGINT questionnaire_version_id FK
+        VARCHAR rule_version
+        VARCHAR task_status
+        DECIMAL total_score
+        JSON dimension_scores_json
+        VARCHAR level_code
+        VARCHAR level_name
+        TEXT feedback_text
+        INT retry_count
+        INT max_retries
+        VARCHAR last_error
+        DATETIME generated_at
+        DATETIME created_at
+        DATETIME updated_at
+    }
+
+    SYS_USER ||--o{ QUESTIONNAIRE : "creator_id 创建草稿"
+    SYS_USER ||--o{ QUESTIONNAIRE_VERSION : "published_by 发布人"
+    QUESTIONNAIRE ||--o{ QUESTIONNAIRE_QUESTION : "1:N 草稿题目"
+    QUESTIONNAIRE ||--o{ QUESTIONNAIRE_VERSION : "1:N 发布版本"
+    QUESTIONNAIRE_VERSION ||--o{ ASSESSMENT_ACTIVITY : "1:N 活动绑定版本"
+    SYS_USER ||--o{ ASSESSMENT_ACTIVITY : "owner_id 负责管理员"
+    ASSESSMENT_ACTIVITY ||--o{ ACTIVITY_PARTICIPANT : "1:N 目标名单"
+    SYS_USER ||--o{ ACTIVITY_PARTICIPANT : "user_id 名单学生"
+    SYS_USER ||--o{ ANSWER_SHEET : "user_id 本人答卷"
+    ASSESSMENT_ACTIVITY ||--o{ ANSWER_SHEET : "1:N uk(activity_id,user_id)"
+    QUESTIONNAIRE_VERSION ||--o{ ANSWER_SHEET : "作答版本追溯"
+    ANSWER_SHEET ||--|{ ANSWER_ITEM : "1:N 作答明细"
+    ANSWER_SHEET ||--o| ASSESSMENT_REPORT : "1:1 sheet_id 唯一"
+    ASSESSMENT_ACTIVITY ||--o{ ASSESSMENT_REPORT : "activity_id"
+    QUESTIONNAIRE_VERSION ||--o{ ASSESSMENT_REPORT : "问卷版本追溯"
+    SYS_USER ||--o{ ASSESSMENT_REPORT : "user_id 报告归属"

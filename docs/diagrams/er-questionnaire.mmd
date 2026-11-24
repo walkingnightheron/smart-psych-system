@@ -1,0 +1,52 @@
+erDiagram
+    direction LR
+
+    SYS_USER {
+        BIGINT id PK
+        VARCHAR username UK
+        VARCHAR real_name
+        VARCHAR role
+        VARCHAR dept_class
+    }
+
+    QUESTIONNAIRE {
+        BIGINT id PK
+        VARCHAR code UK
+        VARCHAR title
+        TEXT description
+        JSON scoring_rule_json
+        INT latest_version
+        BIGINT creator_id FK
+        DATETIME created_at
+        DATETIME updated_at
+    }
+
+    QUESTIONNAIRE_QUESTION {
+        BIGINT id PK
+        BIGINT questionnaire_id FK
+        INT question_no
+        VARCHAR stem
+        VARCHAR question_type
+        VARCHAR dimension_code
+        TINYINT is_reverse
+        TINYINT required
+        JSON options_json
+    }
+
+    QUESTIONNAIRE_VERSION {
+        BIGINT id PK
+        BIGINT questionnaire_id FK
+        INT version_num
+        VARCHAR rule_version
+        VARCHAR title
+        TEXT description
+        JSON questions_snapshot
+        JSON scoring_rule_snapshot
+        BIGINT published_by FK
+        DATETIME published_at
+    }
+
+    SYS_USER ||--o{ QUESTIONNAIRE : "creator_id"
+    SYS_USER ||--o{ QUESTIONNAIRE_VERSION : "published_by"
+    QUESTIONNAIRE ||--o{ QUESTIONNAIRE_QUESTION : "uk(questionnaire_id,question_no)"
+    QUESTIONNAIRE ||--o{ QUESTIONNAIRE_VERSION : "uk(questionnaire_id,version_num)"
