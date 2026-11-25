@@ -9,6 +9,7 @@ import {
   getActivityStatisticsApi,
   createActivityApi,
   updateActivityApi,
+  adjustPublishedSettingsApi,
   publishActivityApi,
   closeActivityApi,
   getAllPublishedVersionsApi,
@@ -488,6 +489,158 @@ async function submitRosterImport() {
   }
 }
 
+// ==================== 调整已发布活动设置弹窗 ====================
+const settingsDialogVisible = ref(false)
+const settingsLoading = ref(false)
+const settingsSaving = ref(false)
+const settingsTargetId = ref(null)
+const settingsSnapshot = ref(null)
+const settingsStudentKeyword = ref('')
+const settingsErrorMessage = ref('')
+
+const settingsForm = reactive({
+  title: '',
+  endTime: '',
+  addParticipantUserIds: [],
+  authorizedAdminIds: []
+})
+
+function normalizeAdminIds(raw) {
+  let ids = raw ?? []
+  if (typeof ids === 'string') {
+    try {
+      ids = JSON.parse(ids)
+    } catch {
+      ids = []
+    }
+  }
+  const myId = Number(userStore.profile?.id)
+  return Array.isArray(ids) ? ids.map(Number).filter((id) => id !== myId) : []
+}
+
+const settingsExistingParticipantIds = computed(() => {
+  const d = settingsSnapshot.value
+  if (!d) return new Set()
+  if (Array.isArray(d.participantUserIds)) {
+    return new Set(d.participantUserIds.map(Number))
+  }
+  if (Array.isArray(d.participants)) {
+    return new Set(d.participants.map((p) => Number(p.userId ?? p.id)))
+  }
+  return new Set()
+})
+
+const settingsAddableStudents = computed(() => {
+  const existing = settingsExistingParticipantIds.value
+  return studentOptions.value.filter((s) => !existing.has(Number(s.id)))
+})
+
+const settingsFilteredStudents = computed(() => {
+  const kw = settingsStudentKeyword.value.trim().toLowerCase()
+  if (!kw) return settingsAddableStudents.value
+  return settingsAddableStudents.value.filter(
+    (s) =>
+      String(s.username || '').toLowerCase().includes(kw) ||
+      String(s.realName || '').toLowerCase().includes(kw) ||
+      String(s.deptClass || '').toLowerCase().includes(kw)
+  )
+})
+
+async function openSettingsDialog(row) {
+  settingsTargetId.value = row.id
+  settingsSnapshot.value = null
+  settingsErrorMessage.value = ''
+  settingsStudentKeyword.value = ''
+  settingsForm.title = ''
+  settingsForm.endTime = ''
+  settingsForm.addParticipantUserIds = []
+  settingsForm.authorizedAdminIds = []
+  settingsDialogVisible.value = true
+  settingsLoading.value = true
+  try {
+    if (!studentOptions.value.length || !adminOptions.value.length) {
+      await ensureReferenceData()
+    }
+    const res = await getActivityDetailApi(row.id)
+    const detail = res?.data ?? res ?? {}
+    settingsSnapshot.value = detail
+    settingsForm.title = detail.title || row.title || ''
+    settingsForm.endTime = detail.endTime || row.endTime || ''
+    settingsForm.authorizedAdminIds = normalizeAdminIds(detail.authorizedAdminIds)
+  } finally {
+    settingsLoading.value = false
+  }
+}
+
+async function submitSettingsForm() {
+  const snapshot = settingsSnapshot.value
+  if (!settingsTargetId.value || !snapshot) return
+
+  const title = settingsForm.title.trim()
+  if (!title) {
+    ElMessage.warning('请输入评估活动名称')
+    return
+  }
+
+  const originalEnd = snapshot.endTime || ''
+  const nextEnd = settingsForm.endTime || ''
+  if (nextEnd !== originalEnd) {
+    if (!nextEnd) {
+      ElMessage.warning('请选择新的结束时间，或保持原结束时间不变')
+      return
+    }
+    if (originalEnd && nextEnd <= originalEnd) {
+      ElMessage.warning(`结束时间只能延长，新结束时间必须晚于当前结束时间 ${originalEnd}`)
+      return
+    }
+  }
+
+  const payload = {}
+  if (title !== (snapshot.title || '')) {
+    payload.title = title
+  }
+  if (nextEnd && nextEnd !== originalEnd) {
+    payload.endTime = nextEnd
+  }
+  if (settingsForm.addParticipantUserIds.length) {
+    payload.addParticipantUserIds = settingsForm.addParticipantUserIds.map(Number)
+  }
+  const originalAdminIds = normalizeAdminIds(snapshot.authorizedAdminIds)
+  const nextAdminIds = settingsForm.authorizedAdminIds.map(Number)
+  const sameAdmins =
+    originalAdminIds.length === nextAdminIds.length &&
+    [...originalAdminIds].sort((a, b) => a - b).join(',') ===
+      [...nextAdminIds].sort((a, b) => a - b).join(',')
+  if (!sameAdmins) {
+    payload.authorizedAdminIds = nextAdminIds
+  }
+
+  if (!Object.keys(payload).length) {
+    ElMessage.info('未修改任何设置')
+    return
+  }
+
+  settingsSaving.value = true
+  settingsErrorMessage.value = ''
+  try {
+    await adjustPublishedSettingsApi(settingsTargetId.value, payload)
+    ElMessage.success('已发布活动设置已更新')
+    settingsDialogVisible.value = false
+    await loadActivities()
+    if (
+      detailDrawerVisible.value &&
+      Number(activityDetail.value?.id) === Number(settingsTargetId.value)
+    ) {
+      await openDetailDrawer({ id: settingsTargetId.value })
+    }
+  } catch (err) {
+    settingsErrorMessage.value =
+      err?.response?.data?.message || err?.data?.message || err?.message || '调整失败，请稍后重试'
+  } finally {
+    settingsSaving.value = false
+  }
+}
+
 onMounted(async () => {
   await Promise.all([loadActivities(), ensureReferenceData()])
 })
@@ -609,6 +762,15 @@ onMounted(async () => {
               @click="handlePublish(row)"
             >
               发布
+            </el-button>
+            <el-button
+              v-if="row.status === 'PUBLISHED'"
+              link
+              type="primary"
+              size="small"
+              @click="openSettingsDialog(row)"
+            >
+              调整设置
             </el-button>
             <el-button
               v-if="row.status === 'PUBLISHED'"
@@ -770,6 +932,18 @@ onMounted(async () => {
               @click="openRosterImportDialog(activityDetail)"
             >
               导入名单 XLSX
+            </el-button>
+          </div>
+
+          <div v-if="activityDetail.status === 'PUBLISHED'" class="detail-draft-bar">
+            <span>活动已发布：问卷版本与开始时间已锁定，可调整标题、延长结束时间、追加学生与授权管理员</span>
+            <el-button
+              type="primary"
+              size="small"
+              plain
+              @click="openSettingsDialog(activityDetail)"
+            >
+              调整设置
             </el-button>
           </div>
 
@@ -1008,6 +1182,141 @@ onMounted(async () => {
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- 调整已发布活动设置弹窗 -->
+    <el-dialog
+      v-model="settingsDialogVisible"
+      :title="`调整已发布活动设置 · ${settingsSnapshot?.title || ''}`"
+      width="720px"
+      destroy-on-close
+    >
+      <div v-loading="settingsLoading">
+        <div class="settings-tip">
+          已发布活动仅可调整：标题、延长结束时间、追加学生、授权管理员；问卷版本与开始时间已锁定，名单只增不减。
+        </div>
+
+        <template v-if="settingsSnapshot">
+          <div class="settings-locked-box">
+            <div class="settings-locked-row">
+              <span class="sl-label">绑定问卷版本</span>
+              <span class="sl-value">
+                {{ settingsSnapshot.questionnaireTitle || '已发布问卷版本' }}
+                <span class="mono-code">（{{ formatVersionLabel(settingsSnapshot) }}）</span>
+              </span>
+              <span class="sl-lock">已锁定 · 不可修改</span>
+            </div>
+            <div class="settings-locked-row">
+              <span class="sl-label">开放开始时间</span>
+              <span class="sl-value tabular-nums">{{ settingsSnapshot.startTime || '-' }}</span>
+              <span class="sl-lock">已锁定 · 不可修改</span>
+            </div>
+          </div>
+
+          <el-form label-position="top">
+            <el-form-item label="评估活动名称 (title)" required>
+              <el-input
+                v-model="settingsForm.title"
+                placeholder="请输入评估活动名称"
+                maxlength="128"
+                clearable
+              />
+            </el-form-item>
+
+            <el-form-item label="开放结束时间 (endTime)" required>
+              <el-date-picker
+                v-model="settingsForm.endTime"
+                type="datetime"
+                placeholder="选择新的结束时间"
+                value-format="YYYY-MM-DD HH:mm:ss"
+                style="width: 100%"
+              />
+              <div class="field-hint tabular-nums">
+                只能延长：新结束时间必须晚于当前结束时间 {{ settingsSnapshot.endTime || '-' }}，不改动请保持原值。
+              </div>
+            </el-form-item>
+
+            <el-form-item>
+              <template #label>
+                <div class="roster-label-bar">
+                  <span class="tabular-nums">
+                    追加参与学生（选填）· 已选
+                    <strong>{{ settingsForm.addParticipantUserIds.length }}</strong> 人
+                  </span>
+                  <el-button size="small" @click="settingsForm.addParticipantUserIds = []">
+                    清空
+                  </el-button>
+                </div>
+              </template>
+
+              <div class="student-picker-box">
+                <div class="field-hint" style="margin: 0 0 8px">
+                  当前名单 {{ settingsExistingParticipantIds.size }} 人只增不减，以下仅展示可新增的学生；留空表示不追加。
+                </div>
+                <el-input
+                  v-model="settingsStudentKeyword"
+                  size="small"
+                  placeholder="按学号、姓名或班级筛选学生..."
+                  clearable
+                  style="margin-bottom: 10px"
+                />
+                <el-checkbox-group
+                  v-model="settingsForm.addParticipantUserIds"
+                  class="student-checkbox-grid"
+                >
+                  <el-checkbox
+                    v-for="stu in settingsFilteredStudents"
+                    :key="stu.id"
+                    :value="stu.id"
+                    border
+                    class="stu-check-item"
+                  >
+                    <span class="mono-code stu-no">{{ stu.username }}</span>
+                    <span class="stu-name">{{ stu.realName }}</span>
+                    <el-tag size="small" type="info" effect="plain">{{ stu.deptClass }}</el-tag>
+                  </el-checkbox>
+                </el-checkbox-group>
+                <div v-if="!settingsAddableStudents.length" class="muted-note">
+                  暂无可追加的学生（全部学生已在当前名单中）
+                </div>
+              </div>
+            </el-form-item>
+
+            <el-form-item label="协同授权管理员（预填当前授权，保存后按当前勾选整体生效）">
+              <el-select
+                v-model="settingsForm.authorizedAdminIds"
+                multiple
+                clearable
+                placeholder="选择需要共享本活动查看权限的管理员"
+                style="width: 100%"
+              >
+                <el-option
+                  v-for="adm in coAdminCandidates"
+                  :key="adm.id"
+                  :value="adm.id"
+                  :label="`${adm.realName}（@${adm.username} · ${adm.deptClass || '管理员'}）`"
+                />
+              </el-select>
+            </el-form-item>
+          </el-form>
+
+          <div v-if="settingsErrorMessage" class="roster-error-box">
+            <div class="roster-err-title">{{ settingsErrorMessage }}</div>
+          </div>
+        </template>
+      </div>
+
+      <template #footer>
+        <el-button @click="settingsDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="settingsSaving"
+          :disabled="!settingsSnapshot"
+          @click="submitSettingsForm"
+        >
+          保存调整
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -1229,5 +1538,56 @@ onMounted(async () => {
   font-weight: 600;
   color: #DC2626;
   margin-bottom: 8px;
+}
+
+.settings-tip {
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  border-radius: 6px;
+  background-color: #F9FAFB;
+  border: 1px solid #E5E7EB;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: #4B5563;
+}
+
+.settings-locked-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  border-radius: 6px;
+  background-color: #F9FAFB;
+  border: 1px solid #E5E7EB;
+}
+
+.settings-locked-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+}
+
+.sl-label {
+  min-width: 84px;
+  color: #6B7280;
+}
+
+.sl-value {
+  color: #6B7280;
+}
+
+.sl-lock {
+  font-size: 12px;
+  color: #9CA3AF;
+}
+
+.field-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #6B7280;
 }
 </style>

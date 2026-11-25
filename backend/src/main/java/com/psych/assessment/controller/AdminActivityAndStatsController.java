@@ -50,6 +50,13 @@ public class AdminActivityAndStatsController {
         return Result.ok(activityService.updateDraftActivity(id, request));
     }
 
+    @PutMapping("/activities/{id}/settings")
+    public Result<ActivityDetailVO> adjustPublishedSettings(
+            @PathVariable("id") Long id,
+            @RequestBody com.psych.assessment.dto.ActivityDtos.AdjustPublishedSettingsRequest request) {
+        return Result.ok(activityService.adjustPublishedSettings(id, request));
+    }
+
     @PostMapping("/activities/{id}/publish")
     public Result<ActivityDetailVO> publishActivity(@PathVariable("id") Long id) {
         return Result.ok(activityService.publishActivity(id));

@@ -1,6 +1,7 @@
 package com.psych.assessment.controller;
 
 import com.psych.assessment.common.Result;
+import com.psych.assessment.dto.AiDtos.AiInsightVO;
 import com.psych.assessment.dto.H5AndReportDtos.H5ActivityDetailVO;
 import com.psych.assessment.dto.H5AndReportDtos.H5ActivityItemVO;
 import com.psych.assessment.dto.H5AndReportDtos.H5RecordDetailVO;
@@ -8,6 +9,8 @@ import com.psych.assessment.dto.H5AndReportDtos.H5RecordItemVO;
 import com.psych.assessment.dto.H5AndReportDtos.ReportDetailVO;
 import com.psych.assessment.dto.H5AndReportDtos.SubmitSheetRequest;
 import com.psych.assessment.dto.H5AndReportDtos.SubmitSheetResponse;
+import com.psych.assessment.security.AuthContext;
+import com.psych.assessment.service.AiInsightService;
 import com.psych.assessment.service.ReportAndStatsService;
 import com.psych.assessment.service.SubmissionService;
 import lombok.RequiredArgsConstructor;
@@ -27,6 +30,7 @@ public class H5AssessmentController {
 
     private final SubmissionService submissionService;
     private final ReportAndStatsService reportAndStatsService;
+    private final AiInsightService aiInsightService;
 
     @GetMapping("/activities")
     public Result<List<H5ActivityItemVO>> listMyActivities() {
@@ -63,5 +67,10 @@ public class H5AssessmentController {
     @PostMapping("/reports/{reportId}/retry")
     public Result<ReportDetailVO> retryMyReport(@PathVariable("reportId") Long reportId) {
         return Result.ok(reportAndStatsService.retryReportForStudent(reportId));
+    }
+
+    @GetMapping("/reports/{reportId}/ai-interpretation")
+    public Result<AiInsightVO> getMyReportAiInterpretation(@PathVariable("reportId") Long reportId) {
+        return Result.ok(aiInsightService.reportInterpretation(reportId, AuthContext.requireUserId(), false));
     }
 }

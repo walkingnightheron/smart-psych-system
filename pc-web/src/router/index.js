@@ -46,6 +46,12 @@ const router = createRouter({
           name: 'statistics',
           component: () => import('@/views/StatisticsView.vue'),
           meta: { title: '结果统计与报告' }
+        },
+        {
+          path: 'ai-settings',
+          name: 'ai-settings',
+          component: () => import('@/views/AiSettingsView.vue'),
+          meta: { title: '智能分析配置' }
         }
       ]
     },

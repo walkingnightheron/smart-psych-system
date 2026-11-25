@@ -44,6 +44,7 @@ public class DemoDataInitializer implements ApplicationRunner {
         if (!seedEnabled) {
             return;
         }
+        ensureLlmConfigDefaultRow();
         Long existingUsers = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM sys_user", Long.class);
         if (existingUsers != null && existingUsers > 0) {
             log.info("DemoDataInitializer skipped: database already contains {} users", existingUsers);
@@ -224,6 +225,21 @@ public class DemoDataInitializer implements ApplicationRunner {
         // Advance H2 / MySQL auto-increment sequences past explicit IDs so subsequent inserts never collide!
         advanceAutoIncrementSequences();
         log.info("DemoDataInitializer completed: 7 users, 1 questionnaire (v1), 2 activities, 2 sheets & reports ready.");
+    }
+
+    /**
+     * llm_config 为全库单行功能路由配置（id=1）；demo 启动时缺行则按 schema 默认值补建
+     * （子开关开启、provider_id 为空），保证 GET /api/admin/llm-config 与 AI 洞察降级链路不因缺行报错。
+     */
+    private void ensureLlmConfigDefaultRow() {
+        Long rows = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM llm_config WHERE id = 1", Long.class);
+        if (rows != null && rows > 0) {
+            return;
+        }
+        jdbcTemplate.update(
+                "INSERT INTO llm_config (id, report_insight_enabled, report_provider_id, report_model, report_temperature, report_max_tokens, cohort_insight_enabled, cohort_provider_id, cohort_model, cohort_temperature, cohort_max_tokens, timeout_seconds) VALUES (1, 1, NULL, '', 0.70, 800, 1, NULL, '', 0.70, 800, 30)"
+        );
+        log.info("DemoDataInitializer inserted default llm_config routing row (id=1, provider_id=NULL).");
     }
 
     private void insertUser(Long id, String username, String pwdHash, String realName, String role, String deptClass, String phone) {

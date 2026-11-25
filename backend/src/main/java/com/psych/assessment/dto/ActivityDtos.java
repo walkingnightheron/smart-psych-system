@@ -28,6 +28,17 @@ public class ActivityDtos {
     @Builder
     @NoArgsConstructor
     @AllArgsConstructor
+    public static class AdjustPublishedSettingsRequest {
+        private String title;
+        private LocalDateTime endTime;
+        private List<Long> addParticipantUserIds;
+        private List<Long> authorizedAdminIds;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
     public static class ActivityListItemVO {
         private Long id;
         private String title;

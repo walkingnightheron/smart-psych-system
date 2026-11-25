@@ -169,6 +169,11 @@ Authorization: Bearer <jwt_token>
 * `GET /api/admin/activities/{id}` — 查询活动详情（含绑定版本信息、名单学生列表、授权管理员ID列表、完成进度；校验管理范围权限，越权 403）
 * `POST /api/admin/activities` — 创建活动（初始 `DRAFT`；必须指定存在的 `questionnaireVersionId`、`startTime < endTime`、`participantUserIds`、`authorizedAdminIds`）
 * `PUT /api/admin/activities/{id}` — 编辑草稿态活动（仅 `DRAFT` 状态允许修改绑定版本与基础设置；已发布/已关闭拒绝修改核心绑定）
+* `PUT /api/admin/activities/{id}/settings` — 调整已发布活动设置（**仅 `PUBLISHED` 状态**，安全子集，守住 REQ03/REQ08 红线）
+  * 请求体（字段均可选，`null` 表示不改动）：`{ "title": "新标题", "endTime": "2027-12-31 23:59:59", "addParticipantUserIds": [7], "authorizedAdminIds": [2] }`
+  * 允许：改标题（非空 ≤128）、**延长结束时间**（新 `endTime` 必须晚于当前 `endTime`）、**追加参与学生**（只增不减，合并去重）、整体替换授权管理员（`authorizedAdminIds` 非 null 时生效，空列表表示清空）。
+  * 禁止：改问卷版本、改开始时间、移除任何已有名单学生、缩短结束时间、对 `DRAFT`/`CLOSED` 调用（返回 400）；越权管理员返回 403。
+  * 响应 `data`：`ActivityDetailVO`；成功后立即失效活动缓存。
 * `POST /api/admin/activities/{id}/publish` — 发布活动（严格校验：仅 `DRAFT -> PUBLISHED`；`questionnaireVersionId` 必须存在且为已发布快照；目标名单 `participantCount > 0`；否则 400；失效活动缓存）
 * `POST /api/admin/activities/{id}/close` — 关闭活动（严格校验：仅 `PUBLISHED -> CLOSED`；保留已有答卷和报告；**立即失效 Redis 活动缓存**，确保关闭后绝不放行任何提交）
 
@@ -398,3 +403,52 @@ Authorization: Bearer <jwt_token>
   * `PENDING`：报告正在异步生成中（前端友好展示等待态并轮询）
   * `SUCCESS`：展示总分 `totalScore`、各维度得分数组 `dimensions`、结果区间 `levelCode/levelName`、建议 `feedbackText`、关联 `sheetId`、`questionnaireVersionId`、`versionNum`、`ruleVersion`、`generatedAt`
   * `FAILED`：展示友好失败提示、`retryCount`、`maxRetries`（支持点击重试 `POST /api/h5/reports/{reportId}/retry`，未超上限时重新投递任务）
+
+---
+
+## 五、智能分析配置与 AI 洞察接口（提高任务，仅限 `ADMIN` 配置；洞察按数据范围授权）
+
+> 安全红线：API Key 仅存库，**任何响应一律脱敏**（只回 `hasApiKey` 与 `apiKeyTail` 尾4位），绝不写入日志或代码仓库；PUT 时 `apiKey` 留空表示保留原值。AI 未启用/无 Key/调用失败时，所有洞察接口返回 `available=false` 与原因，前端回退静态文案，绝不阻断主流程。所有 AI 输出强制「支持性、非诊断」语气并附免责声明。
+
+### 8.1 LLM 提供商管理（多提供商，`/api/admin/llm-providers`）
+* `GET /api/admin/llm-providers` — 列表（脱敏）：`[{ id, name, baseUrl, hasApiKey, apiKeyTail, enabled, updatedAt }]`
+* `POST /api/admin/llm-providers` — 新增：`{ name, baseUrl, apiKey, enabled }`（name/baseUrl 必填）
+* `PUT /api/admin/llm-providers/{id}` — 修改：`{ name?, baseUrl?, apiKey?, enabled? }`（apiKey 留空保留原值）
+* `DELETE /api/admin/llm-providers/{id}` — 删除（若正被报告/群体功能路由引用 → 400，提示先切换）
+* `GET /api/admin/llm-providers/{id}/models` — **自动从上游拉取模型列表**：调 `{baseUrl}/models`（Bearer Key），返回 `{ ok, models: ["qwen-plus", ...], error }`；失败 ok=false + 友好 error（不含 Key）。
+
+### 8.1b AI 功能路由配置（`/api/admin/llm-config`，单行）
+* `GET /api/admin/llm-config` — 读取路由（脱敏，附提供商名）：
+```json
+{
+  "reportInsightEnabled": true, "reportProviderId": 1, "reportProviderName": "阿里百炼",
+  "reportModel": "qwen-plus", "reportTemperature": 0.70, "reportMaxTokens": 800,
+  "cohortInsightEnabled": true, "cohortProviderId": 2, "cohortProviderName": "DeepSeek",
+  "cohortModel": "deepseek-chat", "cohortTemperature": 0.70, "cohortMaxTokens": 800,
+  "timeoutSeconds": 30, "updatedAt": "..."
+}
+```
+* `PUT /api/admin/llm-config` — 保存路由：上述字段（providerId 可空=该功能不绑定）。启用某功能时要求对应 providerId 存在且 enabled、model 非空，否则 400。temperature 0~2、maxTokens 1~4096、timeoutSeconds 5~120。
+* `POST /api/admin/llm-config/test` — 测试连接：`{ providerId, model }`，用该提供商发极小 prompt，返回 `{ ok, latencyMs, model, reply, error }`。
+
+### 8.2 报告个性化解读（REQ07 提高）
+* `GET /api/h5/reports/{reportId}/ai-interpretation` — 学生读取本人报告的 AI 解读（校验 `report.userId==currentUserId`，否则 403）
+* `GET /api/admin/reports/{reportId}/ai-interpretation` — 管理员读取授权活动下报告的 AI 解读（越权 403）
+  * 仅 `taskStatus=SUCCESS` 可生成；按维度分+区间构造 prompt（不含姓名等 PII），结果按 `report:{id}` 缓存。
+  * 响应：
+```json
+{
+  "available": true,
+  "content": "……支持性、非诊断的个性化解读……",
+  "model": "qwen-plus",
+  "generatedAt": "2026-11-24 20:05:00",
+  "disclaimer": "本解读由 AI 生成，仅供自我觉察参考，不构成医学或心理诊断；如有困扰请联系学校心理健康教育中心或专业机构。",
+  "reason": null
+}
+```
+  * 未启用/无 Key/失败：`available=false`、`content=null`、`reason="AI 解读未启用"` 等，前端回退静态 `feedbackText`。
+
+### 8.3 活动群体洞察（REQ08 提高）
+* `GET /api/admin/activities/{id}/ai-insight` — 管理员获取活动群体趋势洞察（校验活动数据范围，越权 403）
+  * 基于统计聚合（完成率、区间分布、维度均分，**不含个体 PII**）构造 prompt，按 `activity:{id}` 缓存。
+  * 响应结构同 8.2（`available/content/model/generatedAt/disclaimer/reason`）。

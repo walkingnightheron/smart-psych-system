@@ -128,3 +128,44 @@ CREATE TABLE IF NOT EXISTS assessment_report (
     INDEX idx_act_status_level (activity_id, task_status, level_code),
     INDEX idx_user_report (user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='评估报告及异步任务状态表';
+
+-- 10. LLM 提供商表（多行，每行独立 baseUrl/apiKey；Key 仅存库、响应脱敏、绝不入库 git）
+CREATE TABLE IF NOT EXISTS llm_provider (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    name VARCHAR(64) NOT NULL COMMENT '提供商显示名',
+    base_url VARCHAR(255) NOT NULL COMMENT 'OpenAI 兼容 Base URL',
+    api_key VARCHAR(512) NOT NULL DEFAULT '' COMMENT 'API Key（仅存库，响应脱敏）',
+    enabled TINYINT NOT NULL DEFAULT 1,
+    updated_by BIGINT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='LLM 提供商表';
+
+-- 11. AI 功能路由配置（单行；报告解读/群体洞察各自绑定提供商与模型）
+CREATE TABLE IF NOT EXISTS llm_config (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    report_insight_enabled TINYINT NOT NULL DEFAULT 1,
+    report_provider_id BIGINT,
+    report_model VARCHAR(128) NOT NULL DEFAULT '',
+    report_temperature DECIMAL(3,2) NOT NULL DEFAULT 0.70,
+    report_max_tokens INT NOT NULL DEFAULT 800,
+    cohort_insight_enabled TINYINT NOT NULL DEFAULT 1,
+    cohort_provider_id BIGINT,
+    cohort_model VARCHAR(128) NOT NULL DEFAULT '',
+    cohort_temperature DECIMAL(3,2) NOT NULL DEFAULT 0.70,
+    cohort_max_tokens INT NOT NULL DEFAULT 800,
+    timeout_seconds INT NOT NULL DEFAULT 30,
+    updated_by BIGINT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AI 功能路由配置表';
+
+-- 12. AI 洞察缓存表（按 cache_key 缓存，避免重复调用 LLM）
+CREATE TABLE IF NOT EXISTS ai_insight_cache (
+    cache_key VARCHAR(128) PRIMARY KEY COMMENT 'report:{id} 或 activity:{id}',
+    content TEXT NOT NULL,
+    model VARCHAR(128),
+    generated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AI 洞察缓存表';
+
+INSERT INTO llm_config (id) SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM llm_config WHERE id = 1);

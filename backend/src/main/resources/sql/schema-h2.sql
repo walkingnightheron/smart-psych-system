@@ -114,3 +114,39 @@ CREATE TABLE IF NOT EXISTS assessment_report (
 );
 CREATE INDEX IF NOT EXISTS idx_act_status_level ON assessment_report (activity_id, task_status, level_code);
 CREATE INDEX IF NOT EXISTS idx_user_report ON assessment_report (user_id);
+
+CREATE TABLE IF NOT EXISTS llm_provider (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    name VARCHAR(64) NOT NULL,
+    base_url VARCHAR(255) NOT NULL,
+    api_key VARCHAR(512) NOT NULL DEFAULT '',
+    enabled TINYINT NOT NULL DEFAULT 1,
+    updated_by BIGINT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS llm_config (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    report_insight_enabled TINYINT NOT NULL DEFAULT 1,
+    report_provider_id BIGINT,
+    report_model VARCHAR(128) NOT NULL DEFAULT '',
+    report_temperature DECIMAL(3,2) NOT NULL DEFAULT 0.70,
+    report_max_tokens INT NOT NULL DEFAULT 800,
+    cohort_insight_enabled TINYINT NOT NULL DEFAULT 1,
+    cohort_provider_id BIGINT,
+    cohort_model VARCHAR(128) NOT NULL DEFAULT '',
+    cohort_temperature DECIMAL(3,2) NOT NULL DEFAULT 0.70,
+    cohort_max_tokens INT NOT NULL DEFAULT 800,
+    timeout_seconds INT NOT NULL DEFAULT 30,
+    updated_by BIGINT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS ai_insight_cache (
+    cache_key VARCHAR(128) PRIMARY KEY,
+    content CLOB NOT NULL,
+    model VARCHAR(128),
+    generated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

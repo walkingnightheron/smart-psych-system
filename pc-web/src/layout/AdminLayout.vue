@@ -8,6 +8,7 @@ import {
   Calendar,
   User,
   DataAnalysis,
+  Setting,
   ArrowDown,
   SwitchButton,
   EditPen
@@ -120,6 +121,10 @@ function handleUserCommand(cmd) {
         <el-menu-item index="/statistics">
           <el-icon><DataAnalysis /></el-icon>
           <span>结果统计与报告</span>
+        </el-menu-item>
+        <el-menu-item index="/ai-settings">
+          <el-icon><Setting /></el-icon>
+          <span>智能分析配置</span>
         </el-menu-item>
       </el-menu>
     </el-aside>

@@ -83,6 +83,10 @@ export function updateActivityApi(id, payload) {
   return request.put(`/admin/activities/${id}`, payload)
 }
 
+export function adjustPublishedSettingsApi(id, data) {
+  return request.put(`/admin/activities/${id}/settings`, data)
+}
+
 export function publishActivityApi(id) {
   return request.post(`/admin/activities/${id}/publish`)
 }
@@ -109,6 +113,47 @@ export function retryAdminReportApi(reportId, reset = false, config = {}) {
       params: reset ? { reset: true } : undefined
     }
   )
+}
+
+// ==================== 智能分析配置与 AI 洞察 (Section 5) ====================
+export function listLlmProvidersApi(config = {}) {
+  return request.get('/admin/llm-providers', config)
+}
+
+export function createLlmProviderApi(data, config = {}) {
+  return request.post('/admin/llm-providers', data, config)
+}
+
+export function updateLlmProviderApi(id, data, config = {}) {
+  return request.put(`/admin/llm-providers/${id}`, data, config)
+}
+
+export function deleteLlmProviderApi(id, config = {}) {
+  return request.delete(`/admin/llm-providers/${id}`, config)
+}
+
+export function fetchLlmProviderModelsApi(id, config = {}) {
+  return request.get(`/admin/llm-providers/${id}/models`, { timeout: 30000, ...config })
+}
+
+export function getLlmConfigApi(config = {}) {
+  return request.get('/admin/llm-config', config)
+}
+
+export function saveLlmConfigApi(data, config = {}) {
+  return request.put('/admin/llm-config', data, config)
+}
+
+export function testLlmConfigApi(data = {}, config = {}) {
+  return request.post('/admin/llm-config/test', data, { timeout: 130000, ...config })
+}
+
+export function getActivityAiInsightApi(id, config = {}) {
+  return request.get(`/admin/activities/${id}/ai-insight`, { timeout: 130000, ...config })
+}
+
+export function getReportAiInterpretationApi(reportId, config = {}) {
+  return request.get(`/admin/reports/${reportId}/ai-interpretation`, { timeout: 130000, ...config })
 }
 
 // ==================== 学生名册与 XLSX 导入/导出 (Section 7) ====================

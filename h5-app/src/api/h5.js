@@ -81,3 +81,11 @@ export function retryMyReportApi(reportId, options = {}) {
     ...options
   })
 }
+
+export function getReportAiInterpretationApi(reportId, options = {}) {
+  return request({
+    url: `/h5/reports/${encodeURIComponent(reportId)}/ai-interpretation`,
+    method: 'GET',
+    ...options
+  })
+}

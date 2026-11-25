@@ -221,6 +221,58 @@ public class ActivityService {
         return getActivityDetailForAdmin(activityId);
     }
 
+    @Transactional(rollbackFor = Exception.class)
+    public ActivityDetailVO adjustPublishedSettings(Long activityId, com.psych.assessment.dto.ActivityDtos.AdjustPublishedSettingsRequest req) {
+        Long adminId = AuthContext.requireUserId();
+        AssessmentActivity activity = activityRepository.findById(activityId)
+                .orElseThrow(() -> new BizException(404, "评估活动不存在: id=" + activityId));
+        accessControlService.checkAdminActivityAccess(activity, adminId);
+
+        if (!"PUBLISHED".equals(activity.getStatus())) {
+            throw new BizException(400, "仅已发布(PUBLISHED)活动可调整设置；草稿请用编辑、已关闭活动不可修改，当前状态为: " + activity.getStatus());
+        }
+        if (req == null) {
+            throw new BizException(400, "调整设置请求参数不能为空");
+        }
+
+        String newTitle = activity.getTitle();
+        if (req.getTitle() != null) {
+            if (req.getTitle().isBlank()) {
+                throw new BizException(400, "活动名称[title]不能为空");
+            }
+            if (req.getTitle().trim().length() > 128) {
+                throw new BizException(400, "活动名称[title]长度不能超过128个字符");
+            }
+            newTitle = req.getTitle().trim();
+        }
+
+        LocalDateTime newEndTime = activity.getEndTime();
+        if (req.getEndTime() != null) {
+            if (!req.getEndTime().isAfter(activity.getEndTime())) {
+                throw new BizException(400, "已发布活动仅允许延长结束时间，新结束时间必须晚于当前结束时间(" + activity.getEndTime() + ")");
+            }
+            newEndTime = req.getEndTime();
+        }
+
+        String newAuthAdminsJson = activity.getAuthorizedAdminIds();
+        if (req.getAuthorizedAdminIds() != null) {
+            List<Long> authAdmins = normalizeAdminIds(req.getAuthorizedAdminIds(), activity.getOwnerId());
+            newAuthAdminsJson = writeJson(authAdmins);
+        }
+
+        // 参与名单只增不减：合并原有名单与新增学生，绝不删除任何已有成员（保护 REQ08 分母与已交卷答卷）
+        if (req.getAddParticipantUserIds() != null && !req.getAddParticipantUserIds().isEmpty()) {
+            List<Long> toAdd = normalizeAndValidateStudentIds(req.getAddParticipantUserIds());
+            LinkedHashSet<Long> union = new LinkedHashSet<>(participantRepository.findUserIdsByActivityId(activityId));
+            union.addAll(toAdd);
+            participantRepository.replaceParticipants(activityId, new ArrayList<>(union));
+        }
+
+        activityRepository.updatePublishedSettings(activityId, newTitle, newEndTime, newAuthAdminsJson);
+        cacheService.evictKey(CacheService.activityKey(activityId));
+        return getActivityDetailForAdmin(activityId);
+    }
+
     public DashboardSummaryVO getDashboardSummary() {
         Long adminId = AuthContext.requireUserId();
         List<AssessmentActivity> visible = activityRepository.findAll().stream()

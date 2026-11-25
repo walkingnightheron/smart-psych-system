@@ -97,4 +97,18 @@ public class AssessmentActivityRepository {
                 id
         );
     }
+
+    /**
+     * 已发布活动安全调整：仅更新标题、结束时间、授权管理员；
+     * 绝不触碰 questionnaire_version_id / start_time / status（REQ03 版本冻结红线）。
+     */
+    public void updatePublishedSettings(Long id, String title, java.time.LocalDateTime endTime, String authorizedAdminIds) {
+        jdbcTemplate.update(
+                "UPDATE assessment_activity SET title = ?, end_time = ?, authorized_admin_ids = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                title,
+                JdbcHelper.toTimestamp(endTime),
+                authorizedAdminIds,
+                id
+        );
+    }
 }

@@ -1,7 +1,7 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { onHide, onLoad, onUnload } from '@dcloudio/uni-app'
-import { getMyRecordsApi, getMyReportApi, retryMyReportApi } from '../../api/h5'
+import { getMyRecordsApi, getMyReportApi, retryMyReportApi, getReportAiInterpretationApi } from '../../api/h5'
 
 const POLL_INTERVAL_MS = 1500
 const MAX_POLL_ATTEMPTS = 15
@@ -15,6 +15,10 @@ const loadError = ref(null)
 
 const report = ref(null)
 const candidateRecords = ref([])
+
+const aiInterpretation = ref(null)
+const aiLoading = ref(false)
+const aiError = ref(null)
 
 const pollCount = ref(0)
 const pollingStoppedByLimit = ref(false)
@@ -54,6 +58,15 @@ onHide(() => {
 onUnload(() => {
   stopPolling()
 })
+
+watch(
+  () => report.value?.taskStatus,
+  (taskStatus) => {
+    if (taskStatus === 'SUCCESS') {
+      fetchAiInterpretation()
+    }
+  }
+)
 
 function stopPolling() {
   if (pollTimer) {
@@ -169,6 +182,31 @@ async function handleRetryReport() {
     // Error toast displayed by request layer
   } finally {
     retrying.value = false
+  }
+}
+
+async function fetchAiInterpretation(force = false) {
+  if (!reportId.value) return
+  if (!force && aiInterpretation.value) return
+
+  aiLoading.value = true
+  aiError.value = null
+  try {
+    const res = await getReportAiInterpretationApi(reportId.value, {
+      skipErrorToast: true
+    })
+    aiInterpretation.value = res?.data || null
+  } catch (err) {
+    aiInterpretation.value = {
+      available: false,
+      content: null,
+      model: null,
+      generatedAt: null,
+      disclaimer: null,
+      reason: err?.message || 'AI 解读加载失败'
+    }
+  } finally {
+    aiLoading.value = false
   }
 }
 
@@ -435,6 +473,39 @@ function goActivities() {
 
         <view class="trace-section">
           答卷 #{{ report.sheetId || sheetIdHint || '--' }} · 问卷 v{{ report.versionNum || 1 }} · 规则 {{ report.ruleVersion || '--' }} · 生成于 {{ report.generatedAt || '--' }}
+        </view>
+      </view>
+
+      <view class="ai-card">
+        <view class="ai-header">
+          <view class="ai-title-row">
+            <text class="ai-title">AI 个性化解读</text>
+            <text
+              v-if="!aiLoading"
+              class="ai-refresh"
+              @tap="fetchAiInterpretation(true)"
+            >
+              刷新
+            </text>
+          </view>
+        </view>
+
+        <view v-if="aiLoading" class="ai-loading">
+          <view class="spinner-small" />
+          <text class="ai-loading-text">AI 解读生成中…</text>
+        </view>
+
+        <view v-else-if="aiInterpretation?.available" class="ai-body">
+          <view class="ai-content">{{ aiInterpretation.content }}</view>
+          <view class="ai-disclaimer">{{ aiInterpretation.disclaimer }}</view>
+          <view class="ai-meta">
+            <text v-if="aiInterpretation.model" class="ai-meta-item">{{ aiInterpretation.model }}</text>
+            <text v-if="aiInterpretation.generatedAt" class="ai-meta-item">生成于 {{ aiInterpretation.generatedAt }}</text>
+          </view>
+        </view>
+
+        <view v-else-if="aiInterpretation" class="ai-unavailable">
+          {{ aiInterpretation.reason || 'AI 解读暂不可用' }}
         </view>
       </view>
 
@@ -842,6 +913,89 @@ function goActivities() {
   font-size: 23rpx;
   text-align: center;
   line-height: 1.5;
+}
+
+/* AI Interpretation */
+.ai-card {
+  margin-top: 24rpx;
+  padding: 28rpx 30rpx;
+  border-radius: 12rpx;
+  background: #FFFFFF;
+  border: 1rpx solid #E8EAEE;
+}
+
+.ai-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.ai-title {
+  color: #1A1F2C;
+  font-size: 28rpx;
+  font-weight: 700;
+}
+
+.ai-refresh {
+  color: #2055A4;
+  font-size: 24rpx;
+}
+
+.ai-loading {
+  display: flex;
+  align-items: center;
+  gap: 14rpx;
+  margin-top: 24rpx;
+  color: #525B6B;
+  font-size: 26rpx;
+}
+
+.ai-loading-text {
+  color: #525B6B;
+}
+
+.spinner-small {
+  width: 36rpx;
+  height: 36rpx;
+  border-radius: 50%;
+  border: 4rpx solid #E8EAEE;
+  border-top-color: #2055A4;
+  animation: spin 0.9s linear infinite;
+}
+
+.ai-body {
+  margin-top: 20rpx;
+}
+
+.ai-content {
+  color: #525B6B;
+  font-size: 27rpx;
+  line-height: 1.75;
+  white-space: pre-wrap;
+}
+
+.ai-disclaimer {
+  margin-top: 20rpx;
+  color: #8A93A2;
+  font-size: 23rpx;
+  line-height: 1.6;
+}
+
+.ai-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16rpx;
+  margin-top: 18rpx;
+  color: #8A93A2;
+  font-size: 21rpx;
+  font-variant-numeric: tabular-nums;
+}
+
+.ai-unavailable {
+  margin-top: 20rpx;
+  color: #8A93A2;
+  font-size: 26rpx;
+  line-height: 1.6;
 }
 
 /* FAILED State */

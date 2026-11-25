@@ -9,7 +9,9 @@ import {
   getActivityStatisticsApi,
   getAdminReportDetailApi,
   retryAdminReportApi,
-  exportActivityStatisticsXlsxApi
+  exportActivityStatisticsXlsxApi,
+  getActivityAiInsightApi,
+  getReportAiInterpretationApi
 } from '@/api/admin'
 
 const route = useRoute()
@@ -36,7 +38,28 @@ let resizeObserver = null
 const reportDialogVisible = ref(false)
 const reportLoading = ref(false)
 const currentReport = ref(null)
+const currentReportId = ref(null)
 const retryingId = ref(null)
+
+// AI 群体洞察与报告解读
+const insightLoading = ref(false)
+const insightData = ref(null)
+const reportAiLoading = ref(false)
+const reportAiData = ref(null)
+
+const insightParagraphs = computed(() =>
+  String(insightData.value?.content || '')
+    .split(/\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+)
+
+const reportAiParagraphs = computed(() =>
+  String(reportAiData.value?.content || '')
+    .split(/\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+)
 
 const parsedReportDimensions = computed(() => {
   const r = currentReport.value
@@ -94,6 +117,7 @@ async function loadActivityOptions() {
 
 async function loadStatistics(activityId) {
   if (!activityId) return
+  insightData.value = null
   statsLoading.value = true
   try {
     const res = await getActivityStatisticsApi(activityId)
@@ -154,7 +178,7 @@ function renderLevelChart() {
     levelChartInstance.setOption(
       {
         tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-        grid: { left: 42, right: 20, top: 28, bottom: 32 },
+        grid: { left: 42, right: 20, top: 44, bottom: 32 },
         xAxis: {
           type: 'category',
           data: dist.map((d) => d.levelName || d.levelCode),
@@ -165,6 +189,7 @@ function renderLevelChart() {
         yAxis: {
           type: 'value',
           minInterval: 1,
+          max: (value) => Math.max(1, Math.ceil(value.max * 1.2)),
           name: '人数',
           nameTextStyle: { color: '#6B7280', fontSize: 12 },
           axisLabel: { color: '#6B7280', fontSize: 12 },
@@ -235,7 +260,7 @@ function renderDimensionChart() {
     dimChartInstance.setOption(
       {
         tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-        grid: { left: 46, right: 20, top: 28, bottom: 32 },
+        grid: { left: 46, right: 20, top: 44, bottom: 32 },
         xAxis: {
           type: 'category',
           data: dims.map((d) => `${d.dimensionName} (${d.dimensionCode})`),
@@ -245,6 +270,7 @@ function renderDimensionChart() {
         },
         yAxis: {
           type: 'value',
+          max: (value) => (value.max > 0 ? Number((value.max * 1.2).toFixed(1)) : 10),
           name: '平均分',
           nameTextStyle: { color: '#6B7280', fontSize: 12 },
           axisLabel: { color: '#6B7280', fontSize: 12 },
@@ -299,6 +325,8 @@ async function openReportModal(row) {
   reportDialogVisible.value = true
   reportLoading.value = true
   currentReport.value = null
+  currentReportId.value = row.reportId
+  reportAiData.value = null
   try {
     const res = await getAdminReportDetailApi(row.reportId)
     currentReport.value = {
@@ -339,6 +367,38 @@ async function handleRetryReport(row) {
     }
   } finally {
     retryingId.value = null
+  }
+}
+
+async function handleGenerateInsight() {
+  if (!selectedActivityId.value) return
+  insightLoading.value = true
+  try {
+    const res = await getActivityAiInsightApi(selectedActivityId.value, { silentError: true })
+    insightData.value = res?.data ?? res ?? { available: false, reason: '洞察接口无响应数据' }
+  } catch (err) {
+    insightData.value = {
+      available: false,
+      reason: err?.response?.data?.message || err?.message || '生成洞察失败，请稍后重试'
+    }
+  } finally {
+    insightLoading.value = false
+  }
+}
+
+async function handleGenerateReportAi() {
+  if (!currentReportId.value) return
+  reportAiLoading.value = true
+  try {
+    const res = await getReportAiInterpretationApi(currentReportId.value, { silentError: true })
+    reportAiData.value = res?.data ?? res ?? { available: false, reason: '解读接口无响应数据' }
+  } catch (err) {
+    reportAiData.value = {
+      available: false,
+      reason: err?.response?.data?.message || err?.message || '生成解读失败，请稍后重试'
+    }
+  } finally {
+    reportAiLoading.value = false
   }
 }
 
@@ -527,6 +587,45 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
+      <!-- AI 群体洞察 -->
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title-wrap">
+            <h3 class="panel-title">AI 群体洞察</h3>
+            <span class="panel-subtitle">基于完成率、区间分布与维度均分的聚合解读，不含个体隐私信息</span>
+          </div>
+          <el-button
+            type="primary"
+            plain
+            size="small"
+            :loading="insightLoading"
+            @click="handleGenerateInsight"
+          >
+            生成洞察
+          </el-button>
+        </div>
+        <div v-loading="insightLoading" class="panel-body">
+          <template v-if="insightData?.available">
+            <p v-for="(para, idx) in insightParagraphs" :key="idx" class="ai-content-para">
+              {{ para }}
+            </p>
+            <div class="ai-meta tabular-nums">
+              模型 {{ insightData.model || '-' }} · 生成时间 {{ insightData.generatedAt || '-' }}
+            </div>
+            <div v-if="insightData.disclaimer" class="ai-disclaimer">{{ insightData.disclaimer }}</div>
+          </template>
+          <div v-else-if="insightData" class="ai-unavailable">
+            <span>{{ insightData.reason || 'AI 洞察暂不可用' }}</span>
+            <el-button link type="primary" size="small" @click="router.push('/ai-settings')">
+              去智能分析配置
+            </el-button>
+          </div>
+          <div v-else class="ai-unavailable">
+            点击「生成洞察」，由大模型解读本次活动的群体数据趋势；未启用时不影响上方统计结果。
+          </div>
+        </div>
+      </div>
+
       <!-- 底部授权参与名单与报告明细表 -->
       <div class="panel">
         <div class="panel-header">
@@ -690,6 +789,38 @@ onBeforeUnmount(() => {
             <div class="r-sec-title">结果区间反馈与调适建议</div>
             <div class="advice-box">
               {{ currentReport.feedbackText || '暂无反馈建议文本' }}
+            </div>
+
+            <div class="r-sec-title ai-sec-header">
+              <span>AI 个性化解读</span>
+              <el-button
+                link
+                type="primary"
+                size="small"
+                :loading="reportAiLoading"
+                @click="handleGenerateReportAi"
+              >
+                {{ reportAiData ? '重新生成' : '生成解读' }}
+              </el-button>
+            </div>
+            <div v-loading="reportAiLoading" class="report-ai-body">
+              <template v-if="reportAiData?.available">
+                <p v-for="(para, idx) in reportAiParagraphs" :key="idx" class="ai-content-para">
+                  {{ para }}
+                </p>
+                <div class="ai-meta tabular-nums">
+                  模型 {{ reportAiData.model || '-' }} · 生成时间 {{ reportAiData.generatedAt || '-' }}
+                </div>
+                <div v-if="reportAiData.disclaimer" class="ai-disclaimer">
+                  {{ reportAiData.disclaimer }}
+                </div>
+              </template>
+              <div v-else-if="reportAiData" class="ai-unavailable">
+                {{ reportAiData.reason || 'AI 解读暂不可用' }}
+              </div>
+              <div v-else class="ai-unavailable">
+                点击「生成解读」获取支持性、非诊断的个性化解读；未启用时以上方规则建议为准。
+              </div>
             </div>
           </template>
 
@@ -908,5 +1039,46 @@ onBeforeUnmount(() => {
   margin-top: 14px;
   font-size: 12px;
   color: #6B7280;
+}
+
+/* AI 洞察与解读 */
+.ai-content-para {
+  margin: 0 0 8px;
+  font-size: 13.5px;
+  color: #111827;
+  line-height: 1.7;
+}
+
+.ai-content-para:last-of-type {
+  margin-bottom: 0;
+}
+
+.ai-meta {
+  margin-top: 10px;
+  font-size: 12px;
+  color: #6B7280;
+}
+
+.ai-disclaimer {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #6B7280;
+  line-height: 1.6;
+}
+
+.ai-unavailable {
+  font-size: 13px;
+  color: #6B7280;
+  line-height: 1.6;
+}
+
+.ai-sec-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.report-ai-body {
+  min-height: 24px;
 }
 </style>
