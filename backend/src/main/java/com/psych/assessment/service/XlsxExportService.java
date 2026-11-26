@@ -71,6 +71,7 @@ public class XlsxExportService {
     private final AssessmentReportRepository reportRepository;
     private final SysUserRepository userRepository;
     private final ObjectMapper objectMapper;
+    private final AuditLogService auditLogService;
 
     public byte[] exportActivityStatisticsXlsx(Long activityId) {
         // 内部完成 404 与管理员数据范围 403 校验
@@ -102,8 +103,12 @@ public class XlsxExportService {
 
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             wb.write(out);
+            auditLogService.recordSuccess(AuditLogService.ACT_STATS_EXPORT,
+                    AuditLogService.RES_ACTIVITY, activityId, "导出活动[" + activityId + "]统计XLSX", null);
             return out.toByteArray();
         } catch (Exception ex) {
+            auditLogService.recordFailure(AuditLogService.ACT_STATS_EXPORT,
+                    AuditLogService.RES_ACTIVITY, activityId, "导出活动[" + activityId + "]统计XLSX失败: " + ex.getMessage(), null);
             throw new BizException(500, "导出评估结果XLSX失败: " + ex.getMessage());
         }
     }

@@ -9,6 +9,7 @@ import {
   User,
   DataAnalysis,
   Setting,
+  Tickets,
   ArrowDown,
   SwitchButton,
   EditPen
@@ -125,6 +126,10 @@ function handleUserCommand(cmd) {
         <el-menu-item index="/ai-settings">
           <el-icon><Setting /></el-icon>
           <span>智能分析配置</span>
+        </el-menu-item>
+        <el-menu-item index="/audit-logs">
+          <el-icon><Tickets /></el-icon>
+          <span>操作日志</span>
         </el-menu-item>
       </el-menu>
     </el-aside>

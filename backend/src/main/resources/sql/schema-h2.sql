@@ -133,11 +133,16 @@ CREATE TABLE IF NOT EXISTS llm_config (
     report_model VARCHAR(128) NOT NULL DEFAULT '',
     report_temperature DECIMAL(3,2) NOT NULL DEFAULT 0.70,
     report_max_tokens INT NOT NULL DEFAULT 800,
+    report_fallback_provider_id BIGINT,
+    report_fallback_model VARCHAR(128) NOT NULL DEFAULT '',
     cohort_insight_enabled TINYINT NOT NULL DEFAULT 1,
     cohort_provider_id BIGINT,
     cohort_model VARCHAR(128) NOT NULL DEFAULT '',
     cohort_temperature DECIMAL(3,2) NOT NULL DEFAULT 0.70,
     cohort_max_tokens INT NOT NULL DEFAULT 800,
+    cohort_fallback_provider_id BIGINT,
+    cohort_fallback_model VARCHAR(128) NOT NULL DEFAULT '',
+    fallback_enabled TINYINT NOT NULL DEFAULT 0,
     timeout_seconds INT NOT NULL DEFAULT 30,
     updated_by BIGINT,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -150,3 +155,21 @@ CREATE TABLE IF NOT EXISTS ai_insight_cache (
     model VARCHAR(128),
     generated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS audit_log (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    operator_id BIGINT,
+    operator_username VARCHAR(64),
+    operator_real_name VARCHAR(64),
+    action_type VARCHAR(64) NOT NULL,
+    resource_type VARCHAR(64) NOT NULL,
+    resource_id BIGINT,
+    summary VARCHAR(255),
+    detail_json CLOB,
+    ip_address VARCHAR(64),
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log (created_at);
+CREATE INDEX IF NOT EXISTS idx_audit_operator ON audit_log (operator_id);
+CREATE INDEX IF NOT EXISTS idx_audit_resource ON audit_log (resource_type, resource_id);
+CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_log (action_type);

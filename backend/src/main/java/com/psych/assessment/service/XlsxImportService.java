@@ -52,6 +52,7 @@ public class XlsxImportService {
     private final XlsxTemplateAndCodec codec;
     private final QuestionnaireValidator validator;
     private final QuestionnaireService questionnaireService;
+    private final AuditLogService auditLogService;
 
     // ==================================================================
     // 7.3 解析（不落库，编辑器回填/预览）
@@ -87,16 +88,29 @@ public class XlsxImportService {
         if (title == null || title.isBlank()) {
             throw new BizException(400, "问卷标题[title]不能为空");
         }
-        QuestionnaireParseResult parsed = doParse(file, formula, reverseMaxPlusMin, ruleVersion, true);
-        QuestionnaireUpsertRequest req = QuestionnaireUpsertRequest.builder()
-                .code(code)
-                .title(title)
-                .description(description)
-                .scoringRule(parsed.scoringRule)
-                .questions(parsed.questions)
-                .build();
-        // 复用 QuestionnaireService.createQuestionnaire 的全量校验 + 原子落库
-        return questionnaireService.createQuestionnaire(req);
+        try {
+            QuestionnaireParseResult parsed = doParse(file, formula, reverseMaxPlusMin, ruleVersion, true);
+            QuestionnaireUpsertRequest req = QuestionnaireUpsertRequest.builder()
+                    .code(code)
+                    .title(title)
+                    .description(description)
+                    .scoringRule(parsed.scoringRule)
+                    .questions(parsed.questions)
+                    .build();
+            // 复用 QuestionnaireService.createQuestionnaire 的全量校验 + 原子落库
+            QuestionnaireDetailVO vo = questionnaireService.createQuestionnaire(req);
+            java.util.Map<String, Object> detail = new java.util.LinkedHashMap<>();
+            detail.put("code", code);
+            detail.put("title", title);
+            detail.put("questionCount", parsed.questions.size());
+            auditLogService.recordSuccess(AuditLogService.ACT_XLSX_IMPORT,
+                    AuditLogService.RES_QUESTIONNAIRE, vo.getId(), "XLSX导入问卷[" + code + "]", detail);
+            return vo;
+        } catch (BizException ex) {
+            auditLogService.recordFailure(AuditLogService.ACT_XLSX_IMPORT,
+                    AuditLogService.RES_QUESTIONNAIRE, null, "XLSX导入问卷失败[" + code + "]: " + ex.getMessage(), null);
+            throw ex;
+        }
     }
 
     // ==================================================================

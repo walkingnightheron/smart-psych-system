@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   Plus,
@@ -22,6 +22,7 @@ import {
   importQuestionnaireXlsxApi
 } from '@/api/admin'
 import { extractImportErrors } from '@/api/request'
+import { diffQuestionnaireVersions } from '@/utils/versionDiff'
 
 const loading = ref(false)
 const questionnaires = ref([])
@@ -580,6 +581,86 @@ async function inspectSnapshot(versionId) {
     snapshotLoading.value = false
   }
 }
+
+// ==================== 已发布版本对比 ====================
+const compareDialogVisible = ref(false)
+const compareLoading = ref(false)
+const compareOldId = ref(null)
+const compareNewId = ref(null)
+const compareResult = ref(null)
+const compareError = ref('')
+
+const compareVersionOptions = computed(() =>
+  [...versionList.value].sort((a, b) => Number(b.versionNum) - Number(a.versionNum))
+)
+
+function openCompareDialog() {
+  if (versionList.value.length < 2) {
+    ElMessage.warning('该问卷已发布版本不足两个，无法进行版本对比，请先发布新版本')
+    return
+  }
+  const sorted = compareVersionOptions.value
+  compareOldId.value = sorted[1].id
+  compareNewId.value = sorted[0].id
+  compareResult.value = null
+  compareError.value = ''
+  compareDialogVisible.value = true
+  runCompare()
+}
+
+function swapCompareVersions() {
+  const temp = compareOldId.value
+  compareOldId.value = compareNewId.value
+  compareNewId.value = temp
+  runCompare()
+}
+
+async function runCompare() {
+  if (!compareOldId.value || !compareNewId.value) {
+    ElMessage.warning('请选择两个已发布版本后再开始对比')
+    return
+  }
+  if (compareOldId.value === compareNewId.value) {
+    ElMessage.warning('基准版本与对比版本不能相同，请选择两个不同的版本')
+    return
+  }
+  compareLoading.value = true
+  compareError.value = ''
+  compareResult.value = null
+  try {
+    const [oldRes, newRes] = await Promise.all([
+      getQuestionnaireVersionSnapshotApi(compareOldId.value),
+      getQuestionnaireVersionSnapshotApi(compareNewId.value)
+    ])
+    compareResult.value = diffQuestionnaireVersions(
+      oldRes?.data ?? oldRes ?? {},
+      newRes?.data ?? newRes ?? {}
+    )
+  } catch (err) {
+    compareError.value =
+      err?.response?.data?.message || err?.message || '版本快照加载失败，请重试'
+  } finally {
+    compareLoading.value = false
+  }
+}
+
+function fmtDiffVal(key, val) {
+  if (val === null || val === undefined || val === '') return '—'
+  if (['isReverse', 'required', 'minInclusive', 'maxInclusive'].includes(key)) {
+    return val ? '是' : '否'
+  }
+  return String(val)
+}
+
+const compareDimensionRows = computed(() => {
+  const list = compareResult.value?.ruleDiff?.dimensionChanges ?? []
+  return list.flatMap((d) => d.changes.map((c) => ({ code: d.code, ...c })))
+})
+
+const compareLevelRows = computed(() => {
+  const list = compareResult.value?.ruleDiff?.levelChanges ?? []
+  return list.flatMap((lv) => lv.changes.map((c) => ({ code: lv.code, ...c })))
+})
 
 // ==================== 题库模板下载与 XLSX 导入 ====================
 const templateDownloading = ref(false)
@@ -1314,7 +1395,21 @@ onMounted(() => {
         <template v-else>
           <!-- 左侧版本列表 -->
           <div class="version-sidebar">
-            <div class="ver-side-title">已发布版本</div>
+            <div class="ver-side-head">
+              <span class="ver-side-title">已发布版本</span>
+              <el-button
+                size="small"
+                type="primary"
+                plain
+                :disabled="versionList.length < 2"
+                @click="openCompareDialog"
+              >
+                版本对比
+              </el-button>
+            </div>
+            <div v-if="versionList.length < 2" class="ver-compare-hint">
+              已发布版本不足两个，暂无法对比
+            </div>
             <div
               v-for="ver in versionList"
               :key="ver.id"
@@ -1441,6 +1536,254 @@ onMounted(() => {
         </div>
       </template>
     </el-drawer>
+
+    <!-- 已发布版本对比弹窗 -->
+    <el-dialog
+      v-model="compareDialogVisible"
+      :title="`版本对比 · ${historyTarget?.title || ''}`"
+      width="980px"
+      destroy-on-close
+    >
+      <div class="compare-picker">
+        <div class="compare-field">
+          <label>基准版本（旧）</label>
+          <el-select v-model="compareOldId" style="width: 250px">
+            <el-option
+              v-for="ver in compareVersionOptions"
+              :key="ver.id"
+              :label="`v${ver.versionNum} · ${ver.ruleVersion || '默认规则'}`"
+              :value="ver.id"
+            />
+          </el-select>
+        </div>
+        <el-button link type="primary" class="compare-swap" @click="swapCompareVersions">
+          交换新旧
+        </el-button>
+        <div class="compare-field">
+          <label>对比版本（新）</label>
+          <el-select v-model="compareNewId" style="width: 250px">
+            <el-option
+              v-for="ver in compareVersionOptions"
+              :key="ver.id"
+              :label="`v${ver.versionNum} · ${ver.ruleVersion || '默认规则'}`"
+              :value="ver.id"
+            />
+          </el-select>
+        </div>
+        <el-button type="primary" :loading="compareLoading" @click="runCompare">
+          开始对比
+        </el-button>
+      </div>
+
+      <div v-if="compareError" class="xlsx-err-box compare-err">
+        <div class="xlsx-err-title">{{ compareError }}</div>
+        <el-button size="small" type="primary" plain @click="runCompare">重试</el-button>
+      </div>
+
+      <div v-loading="compareLoading" class="compare-body">
+        <template v-if="compareResult">
+          <div class="compare-meta tabular-nums">
+            v{{ compareResult.oldMeta.versionNum }}（{{ compareResult.oldMeta.ruleVersion || '-' }}）
+            <span class="compare-arrow">→</span>
+            v{{ compareResult.newMeta.versionNum }}（{{ compareResult.newMeta.ruleVersion || '-' }}）
+          </div>
+
+          <div class="compare-summary tabular-nums">
+            <span class="cmp-stat">
+              新增题目 <strong class="cmp-added-num">{{ compareResult.stats.added }}</strong>
+            </span>
+            <span class="cmp-stat">
+              删除题目 <strong class="cmp-removed-num">{{ compareResult.stats.removed }}</strong>
+            </span>
+            <span class="cmp-stat">
+              修改题目 <strong class="cmp-changed-num">{{ compareResult.stats.changed }}</strong>
+            </span>
+            <span class="cmp-stat">
+              规则变更 <strong>{{ compareResult.stats.ruleChanges }}</strong>
+            </span>
+          </div>
+
+          <div v-if="compareResult.totalChanges === 0" class="compare-same-box">
+            两个版本的题目、选项与计分规则完全一致，未检测到差异。
+          </div>
+
+          <template v-else>
+            <!-- 新增题目 -->
+            <div v-if="compareResult.addedQuestions.length" class="compare-section">
+              <div class="sub-block-header">
+                <span>新增题目（{{ compareResult.addedQuestions.length }} 题）</span>
+              </div>
+              <div class="cmp-q-list">
+                <div
+                  v-for="q in compareResult.addedQuestions"
+                  :key="`add-${q.questionNo}`"
+                  class="cmp-q-card"
+                >
+                  <div class="cmp-q-head">
+                    <strong class="tabular-nums">Q{{ q.questionNo }}. {{ q.stem }}</strong>
+                    <div class="snap-q-tags">
+                      <el-tag size="small" type="success" effect="plain">新增</el-tag>
+                      <el-tag size="small" effect="plain">{{ q.dimensionCode }}</el-tag>
+                      <el-tag v-if="q.isReverse" size="small" type="warning" effect="plain">
+                        反向计分
+                      </el-tag>
+                    </div>
+                  </div>
+                  <div class="snap-opts">
+                    <span
+                      v-for="opt in q.options"
+                      :key="opt.optCode"
+                      class="snap-opt-chip tabular-nums"
+                    >
+                      {{ opt.optCode }}. {{ opt.label }}（{{ opt.score }}分）
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 删除题目 -->
+            <div v-if="compareResult.removedQuestions.length" class="compare-section">
+              <div class="sub-block-header">
+                <span>删除题目（{{ compareResult.removedQuestions.length }} 题）</span>
+              </div>
+              <div class="cmp-q-list">
+                <div
+                  v-for="q in compareResult.removedQuestions"
+                  :key="`del-${q.questionNo}`"
+                  class="cmp-q-card"
+                >
+                  <div class="cmp-q-head">
+                    <strong class="tabular-nums">Q{{ q.questionNo }}. {{ q.stem }}</strong>
+                    <div class="snap-q-tags">
+                      <el-tag size="small" type="danger" effect="plain">删除</el-tag>
+                      <el-tag size="small" effect="plain">{{ q.dimensionCode }}</el-tag>
+                      <el-tag v-if="q.isReverse" size="small" type="warning" effect="plain">
+                        反向计分
+                      </el-tag>
+                    </div>
+                  </div>
+                  <div class="snap-opts">
+                    <span
+                      v-for="opt in q.options"
+                      :key="opt.optCode"
+                      class="snap-opt-chip tabular-nums"
+                    >
+                      {{ opt.optCode }}. {{ opt.label }}（{{ opt.score }}分）
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 题目内容变更（题干 / 维度 / 反向计分 / 必答 / 选项文字与分值） -->
+            <div v-if="compareResult.changedQuestions.length" class="compare-section">
+              <div class="sub-block-header">
+                <span>题目内容变更（{{ compareResult.changedQuestions.length }} 题）</span>
+              </div>
+              <div class="cmp-q-list">
+                <div
+                  v-for="cq in compareResult.changedQuestions"
+                  :key="`chg-${cq.questionNo}`"
+                  class="cmp-q-card"
+                >
+                  <div class="cmp-q-head">
+                    <strong class="tabular-nums">Q{{ cq.questionNo }}. {{ cq.stem }}</strong>
+                    <el-tag size="small" type="warning" effect="plain">修改</el-tag>
+                  </div>
+                  <el-table :data="cq.changes" size="small" border>
+                    <el-table-column prop="label" label="变更项" width="170" />
+                    <el-table-column label="旧值" min-width="220">
+                      <template #default="{ row }">
+                        <span class="cmp-old">{{ fmtDiffVal(row.key, row.old) }}</span>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="新值" min-width="220">
+                      <template #default="{ row }">
+                        <span class="cmp-new">{{ fmtDiffVal(row.key, row.new) }}</span>
+                      </template>
+                    </el-table-column>
+                  </el-table>
+                </div>
+              </div>
+            </div>
+
+            <!-- 计分规则变更 -->
+            <div v-if="compareResult.stats.ruleChanges > 0" class="compare-section">
+              <div class="sub-block-header"><span>计分规则变更</span></div>
+
+              <el-table
+                v-if="compareResult.ruleDiff.baseFields.length"
+                :data="compareResult.ruleDiff.baseFields"
+                size="small"
+                border
+                class="cmp-rule-table"
+              >
+                <el-table-column prop="label" label="规则字段" width="170" />
+                <el-table-column label="旧值" min-width="220">
+                  <template #default="{ row }">
+                    <span class="cmp-old">{{ fmtDiffVal(row.key, row.old) }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="新值" min-width="220">
+                  <template #default="{ row }">
+                    <span class="cmp-new">{{ fmtDiffVal(row.key, row.new) }}</span>
+                  </template>
+                </el-table-column>
+              </el-table>
+
+              <template v-if="compareDimensionRows.length">
+                <div class="cmp-sub-title">维度变更</div>
+                <el-table :data="compareDimensionRows" size="small" border>
+                  <el-table-column label="维度编码" width="130">
+                    <template #default="{ row }">
+                      <span class="mono-code">{{ row.code }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column prop="label" label="变更项" width="130" />
+                  <el-table-column label="旧值" min-width="190">
+                    <template #default="{ row }">
+                      <span class="cmp-old">{{ fmtDiffVal(row.key, row.old) }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="新值" min-width="190">
+                    <template #default="{ row }">
+                      <span class="cmp-new">{{ fmtDiffVal(row.key, row.new) }}</span>
+                    </template>
+                  </el-table-column>
+                </el-table>
+              </template>
+
+              <template v-if="compareLevelRows.length">
+                <div class="cmp-sub-title">结果区间变更</div>
+                <el-table :data="compareLevelRows" size="small" border>
+                  <el-table-column label="区间编码" width="130">
+                    <template #default="{ row }">
+                      <span class="mono-code">{{ row.code }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column prop="label" label="变更项" width="130" />
+                  <el-table-column label="旧值" min-width="190">
+                    <template #default="{ row }">
+                      <span class="cmp-old">{{ fmtDiffVal(row.key, row.old) }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="新值" min-width="190">
+                    <template #default="{ row }">
+                      <span class="cmp-new">{{ fmtDiffVal(row.key, row.new) }}</span>
+                    </template>
+                  </el-table-column>
+                </el-table>
+              </template>
+            </div>
+          </template>
+        </template>
+      </div>
+
+      <template #footer>
+        <el-button @click="compareDialogVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
 
     <!-- 导入 XLSX 新建问卷弹窗 -->
     <el-dialog
@@ -1843,7 +2186,24 @@ onMounted(() => {
   font-size: 12px;
   font-weight: 600;
   color: #6B7280;
+}
+
+.ver-side-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
   margin-bottom: 4px;
+}
+
+.ver-compare-hint {
+  font-size: 11px;
+  line-height: 1.5;
+  color: #D97706;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background-color: #FFFBEB;
+  border: 1px solid #FDE68A;
 }
 
 .ver-item {
@@ -2026,5 +2386,140 @@ onMounted(() => {
   font-weight: 600;
   color: #DC2626;
   margin-bottom: 8px;
+}
+
+/* Version Compare Dialog */
+.compare-picker {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+  border-radius: 6px;
+  background-color: #F9FAFB;
+  border: 1px solid #E5E7EB;
+}
+
+.compare-field label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: #4B5563;
+}
+
+.compare-swap {
+  margin-bottom: 5px;
+}
+
+.compare-err {
+  margin-top: 0;
+  margin-bottom: 14px;
+}
+
+.compare-body {
+  min-height: 160px;
+}
+
+.compare-meta {
+  font-size: 13px;
+  font-weight: 600;
+  color: #111827;
+  margin-bottom: 10px;
+}
+
+.compare-arrow {
+  margin: 0 8px;
+  color: #2055A4;
+}
+
+.compare-summary {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  border-radius: 6px;
+  background-color: #F9FAFB;
+  border: 1px solid #E5E7EB;
+  font-size: 12.5px;
+  color: #4B5563;
+}
+
+.cmp-stat strong {
+  font-size: 15px;
+  font-weight: 600;
+  color: #111827;
+  margin-left: 2px;
+}
+
+.cmp-added-num {
+  color: #16A34A !important;
+}
+
+.cmp-removed-num {
+  color: #DC2626 !important;
+}
+
+.cmp-changed-num {
+  color: #D97706 !important;
+}
+
+.compare-same-box {
+  padding: 12px 14px;
+  border-radius: 6px;
+  background-color: #F0FDF4;
+  border: 1px solid #BBF7D0;
+  font-size: 13px;
+  color: #16A34A;
+}
+
+.compare-section {
+  margin-bottom: 18px;
+}
+
+.cmp-q-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cmp-q-card {
+  padding: 12px;
+  border-radius: 6px;
+  border: 1px solid #E5E7EB;
+  background-color: #FFFFFF;
+}
+
+.cmp-q-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  margin-bottom: 8px;
+  color: #111827;
+}
+
+.cmp-old {
+  color: #6B7280;
+}
+
+.cmp-new {
+  color: #111827;
+  font-weight: 500;
+}
+
+.cmp-rule-table {
+  margin-bottom: 4px;
+}
+
+.cmp-sub-title {
+  margin: 12px 0 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #4B5563;
 }
 </style>

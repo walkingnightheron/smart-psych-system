@@ -27,6 +27,7 @@ public class LlmProviderService {
     private final LlmProviderRepository providerRepository;
     private final LlmConfigRepository configRepository;
     private final LlmClient llmClient;
+    private final AuditLogService auditLogService;
 
     public List<LlmProviderVO> list() {
         return providerRepository.findAll().stream()
@@ -59,6 +60,9 @@ public class LlmProviderService {
                 .build();
         LlmProvider saved = providerRepository.insert(p);
         log.info("LLM provider created: id={}, name={}, enabled={}", saved.getId(), saved.getName(), saved.getEnabled());
+        auditLogService.recordSuccess(AuditLogService.ACT_LLM_PROVIDER_CREATE,
+                AuditLogService.RES_LLM_PROVIDER, saved.getId(), "新建LLM提供商[" + saved.getName() + "]",
+                providerDetail(name, baseUrl, p.getEnabled(), !isBlank(p.getApiKey())));
         return toMaskedVO(reload(saved.getId()));
     }
 
@@ -92,6 +96,9 @@ public class LlmProviderService {
         providerRepository.update(updated);
         log.info("LLM provider updated: id={}, name={}, enabled={}, hasApiKey={}",
                 id, name, enabled, !isBlank(apiKey));
+        auditLogService.recordSuccess(AuditLogService.ACT_LLM_PROVIDER_UPDATE,
+                AuditLogService.RES_LLM_PROVIDER, id, "修改LLM提供商[" + name + "]",
+                providerDetail(name, baseUrl, enabled, !isBlank(apiKey)));
         return toMaskedVO(reload(id));
     }
 
@@ -104,6 +111,18 @@ public class LlmProviderService {
         }
         providerRepository.delete(id);
         log.info("LLM provider deleted: id={}", id);
+        auditLogService.recordSuccess(AuditLogService.ACT_LLM_PROVIDER_DELETE,
+                AuditLogService.RES_LLM_PROVIDER, id, "删除LLM提供商[id=" + id + "]", null);
+    }
+
+    /** 审计明细：仅回 name/baseUrl/enabled/hasApiKey，绝不回 apiKey 明文。 */
+    private java.util.Map<String, Object> providerDetail(String name, String baseUrl, int enabled, boolean hasApiKey) {
+        java.util.Map<String, Object> detail = new java.util.LinkedHashMap<>();
+        detail.put("name", name);
+        detail.put("baseUrl", baseUrl);
+        detail.put("enabled", enabled == 1);
+        detail.put("hasApiKey", hasApiKey);
+        return detail;
     }
 
     /**

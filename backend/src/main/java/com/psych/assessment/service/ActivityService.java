@@ -31,6 +31,7 @@ import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -52,6 +53,7 @@ public class ActivityService {
     private final AccessControlService accessControlService;
     private final CacheService cacheService;
     private final ObjectMapper objectMapper;
+    private final AuditLogService auditLogService;
 
     public static BigDecimal computeCompletionRate(long completedCount, long participantCount) {
         if (participantCount <= 0) {
@@ -127,23 +129,36 @@ public class ActivityService {
 
     @Transactional(rollbackFor = Exception.class)
     public ActivityDetailVO createActivity(ActivityUpsertRequest req) {
-        validateActivityUpsert(req);
-        Long ownerId = AuthContext.requireUserId();
-        List<Long> authAdmins = normalizeAdminIds(req.getAuthorizedAdminIds(), ownerId);
-        List<Long> studentIds = normalizeAndValidateStudentIds(req.getParticipantUserIds());
+        String title = req == null ? null : (req.getTitle() == null ? null : req.getTitle().trim());
+        try {
+            validateActivityUpsert(req);
+            Long ownerId = AuthContext.requireUserId();
+            List<Long> authAdmins = normalizeAdminIds(req.getAuthorizedAdminIds(), ownerId);
+            List<Long> studentIds = normalizeAndValidateStudentIds(req.getParticipantUserIds());
 
-        Long actId = activityRepository.insert(AssessmentActivity.builder()
-                .title(req.getTitle().trim())
-                .questionnaireVersionId(req.getQuestionnaireVersionId())
-                .status("DRAFT")
-                .startTime(req.getStartTime())
-                .endTime(req.getEndTime())
-                .ownerId(ownerId)
-                .authorizedAdminIds(writeJson(authAdmins))
-                .build());
+            Long actId = activityRepository.insert(AssessmentActivity.builder()
+                    .title(req.getTitle().trim())
+                    .questionnaireVersionId(req.getQuestionnaireVersionId())
+                    .status("DRAFT")
+                    .startTime(req.getStartTime())
+                    .endTime(req.getEndTime())
+                    .ownerId(ownerId)
+                    .authorizedAdminIds(writeJson(authAdmins))
+                    .build());
 
-        participantRepository.replaceParticipants(actId, studentIds);
-        return getActivityDetailForAdmin(actId);
+            participantRepository.replaceParticipants(actId, studentIds);
+            Map<String, Object> detail = new LinkedHashMap<>();
+            detail.put("title", title);
+            detail.put("questionnaireVersionId", req.getQuestionnaireVersionId());
+            detail.put("participantCount", studentIds.size());
+            auditLogService.recordSuccess(AuditLogService.ACT_ACTIVITY_CREATE,
+                    AuditLogService.RES_ACTIVITY, actId, "创建活动[" + title + "]", detail);
+            return getActivityDetailForAdmin(actId);
+        } catch (BizException ex) {
+            auditLogService.recordFailure(AuditLogService.ACT_ACTIVITY_CREATE,
+                    AuditLogService.RES_ACTIVITY, null, "创建活动失败[" + title + "]: " + ex.getMessage(), null);
+            throw ex;
+        }
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -200,6 +215,8 @@ public class ActivityService {
 
         activityRepository.updateStatus(activityId, "PUBLISHED");
         cacheService.evictKey(CacheService.activityKey(activityId));
+        auditLogService.recordSuccess(AuditLogService.ACT_ACTIVITY_PUBLISH,
+                AuditLogService.RES_ACTIVITY, activityId, "发布活动[" + activity.getTitle() + "]", null);
         return getActivityDetailForAdmin(activityId);
     }
 
@@ -218,6 +235,8 @@ public class ActivityService {
         activityRepository.updateStatus(activityId, "CLOSED");
         // REQ04 & REQ09: Immediately evict activity cache!
         cacheService.evictKey(CacheService.activityKey(activityId));
+        auditLogService.recordSuccess(AuditLogService.ACT_ACTIVITY_CLOSE,
+                AuditLogService.RES_ACTIVITY, activityId, "关闭活动[" + activity.getTitle() + "]", null);
         return getActivityDetailForAdmin(activityId);
     }
 
@@ -270,6 +289,8 @@ public class ActivityService {
 
         activityRepository.updatePublishedSettings(activityId, newTitle, newEndTime, newAuthAdminsJson);
         cacheService.evictKey(CacheService.activityKey(activityId));
+        auditLogService.recordSuccess(AuditLogService.ACT_ACTIVITY_ADJUST_SETTINGS,
+                AuditLogService.RES_ACTIVITY, activityId, "调整已发布活动设置[" + newTitle + "]", null);
         return getActivityDetailForAdmin(activityId);
     }
 

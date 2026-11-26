@@ -28,6 +28,12 @@ public class LlmConfig {
     private String cohortModel;
     private BigDecimal cohortTemperature;
     private Integer cohortMaxTokens;
+    /** 备用路由（自动降级）字段：DDL 若尚未补充以下列，Repository 以 null/0 兼容读取，默认关闭降级。 */
+    private Long reportFallbackProviderId;
+    private String reportFallbackModel;
+    private Long cohortFallbackProviderId;
+    private String cohortFallbackModel;
+    private Integer fallbackEnabled;
     private Integer timeoutSeconds;
     private Long updatedBy;
     private LocalDateTime createdAt;

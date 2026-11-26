@@ -11,6 +11,12 @@ import java.util.Optional;
 
 /**
  * llm_config 全库单行路由配置（固定 id=1），upsert 兼容 MySQL 与 H2（先 UPDATE，无行则显式 INSERT id=1）。
+ *
+ * <p>备用路由字段（report_fallback_provider_id/report_fallback_model、
+ * cohort_fallback_provider_id/cohort_fallback_model、fallback_enabled）属于后置扩展列：
+ * 读取时经 {@link JdbcHelper#getLongOpt}/{@link JdbcHelper#getStringOpt}/{@link JdbcHelper#getIntOpt}
+ * 在列缺失时安全回退为 null（降级默认关闭）；写入时按列是否存在动态选择语句，
+ * 保证 DDL 尚未补列的老库也能正常运行。
  */
 @Repository
 @RequiredArgsConstructor
@@ -32,6 +38,11 @@ public class LlmConfigRepository {
             .cohortModel(rs.getString("cohort_model"))
             .cohortTemperature(rs.getBigDecimal("cohort_temperature"))
             .cohortMaxTokens(rs.getInt("cohort_max_tokens"))
+            .reportFallbackProviderId(JdbcHelper.getLongOpt(rs, "report_fallback_provider_id"))
+            .reportFallbackModel(JdbcHelper.getStringOpt(rs, "report_fallback_model"))
+            .cohortFallbackProviderId(JdbcHelper.getLongOpt(rs, "cohort_fallback_provider_id"))
+            .cohortFallbackModel(JdbcHelper.getStringOpt(rs, "cohort_fallback_model"))
+            .fallbackEnabled(JdbcHelper.getIntOpt(rs, "fallback_enabled"))
             .timeoutSeconds(rs.getInt("timeout_seconds"))
             .updatedBy((Long) rs.getObject("updated_by"))
             .createdAt(JdbcHelper.getLocalDateTime(rs, "created_at"))
@@ -48,6 +59,14 @@ public class LlmConfigRepository {
     }
 
     public void upsert(LlmConfig cfg) {
+        if (hasFallbackColumns()) {
+            upsertWithFallback(cfg);
+        } else {
+            upsertMinimal(cfg);
+        }
+    }
+
+    private void upsertMinimal(LlmConfig cfg) {
         int updated = jdbcTemplate.update(
                 "UPDATE llm_config SET report_insight_enabled = ?, report_provider_id = ?, report_model = ?, report_temperature = ?, report_max_tokens = ?, cohort_insight_enabled = ?, cohort_provider_id = ?, cohort_model = ?, cohort_temperature = ?, cohort_max_tokens = ?, timeout_seconds = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                 cfg.getReportInsightEnabled(),
@@ -81,6 +100,66 @@ public class LlmConfigRepository {
                     cfg.getTimeoutSeconds(),
                     cfg.getUpdatedBy()
             );
+        }
+    }
+
+    private void upsertWithFallback(LlmConfig cfg) {
+        int updated = jdbcTemplate.update(
+                "UPDATE llm_config SET report_insight_enabled = ?, report_provider_id = ?, report_model = ?, report_temperature = ?, report_max_tokens = ?, cohort_insight_enabled = ?, cohort_provider_id = ?, cohort_model = ?, cohort_temperature = ?, cohort_max_tokens = ?, report_fallback_provider_id = ?, report_fallback_model = ?, cohort_fallback_provider_id = ?, cohort_fallback_model = ?, fallback_enabled = ?, timeout_seconds = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                cfg.getReportInsightEnabled(),
+                cfg.getReportProviderId(),
+                cfg.getReportModel(),
+                cfg.getReportTemperature(),
+                cfg.getReportMaxTokens(),
+                cfg.getCohortInsightEnabled(),
+                cfg.getCohortProviderId(),
+                cfg.getCohortModel(),
+                cfg.getCohortTemperature(),
+                cfg.getCohortMaxTokens(),
+                cfg.getReportFallbackProviderId(),
+                cfg.getReportFallbackModel(),
+                cfg.getCohortFallbackProviderId(),
+                cfg.getCohortFallbackModel(),
+                cfg.getFallbackEnabled(),
+                cfg.getTimeoutSeconds(),
+                cfg.getUpdatedBy(),
+                SINGLETON_ID
+        );
+        if (updated == 0) {
+            jdbcTemplate.update(
+                    "INSERT INTO llm_config (id, report_insight_enabled, report_provider_id, report_model, report_temperature, report_max_tokens, cohort_insight_enabled, cohort_provider_id, cohort_model, cohort_temperature, cohort_max_tokens, report_fallback_provider_id, report_fallback_model, cohort_fallback_provider_id, cohort_fallback_model, fallback_enabled, timeout_seconds, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    SINGLETON_ID,
+                    cfg.getReportInsightEnabled(),
+                    cfg.getReportProviderId(),
+                    cfg.getReportModel(),
+                    cfg.getReportTemperature(),
+                    cfg.getReportMaxTokens(),
+                    cfg.getCohortInsightEnabled(),
+                    cfg.getCohortProviderId(),
+                    cfg.getCohortModel(),
+                    cfg.getCohortTemperature(),
+                    cfg.getCohortMaxTokens(),
+                    cfg.getReportFallbackProviderId(),
+                    cfg.getReportFallbackModel(),
+                    cfg.getCohortFallbackProviderId(),
+                    cfg.getCohortFallbackModel(),
+                    cfg.getFallbackEnabled(),
+                    cfg.getTimeoutSeconds(),
+                    cfg.getUpdatedBy()
+            );
+        }
+    }
+
+    /**
+     * 探测备用路由列是否已存在（每次实时探测，避免 DDL 后置补列时缓存陈旧）。
+     * 列缺失时 COUNT(列) 抛异常 → 视为不存在，降级为最小编写。
+     */
+    private boolean hasFallbackColumns() {
+        try {
+            jdbcTemplate.queryForObject("SELECT COUNT(fallback_enabled) FROM llm_config", Integer.class);
+            return true;
+        } catch (Exception ex) {
+            return false;
         }
     }
 }

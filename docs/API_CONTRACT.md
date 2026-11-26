@@ -410,6 +410,17 @@ Authorization: Bearer <jwt_token>
 
 > 安全红线：API Key 仅存库，**任何响应一律脱敏**（只回 `hasApiKey` 与 `apiKeyTail` 尾4位），绝不写入日志或代码仓库；PUT 时 `apiKey` 留空表示保留原值。AI 未启用/无 Key/调用失败时，所有洞察接口返回 `available=false` 与原因，前端回退静态文案，绝不阻断主流程。所有 AI 输出强制「支持性、非诊断」语气并附免责声明。
 
+### 8.4 AI 备用路由
+
+`llm_config` 还支持 `fallback_enabled`、`report_fallback_provider_id`、`report_fallback_model`、`cohort_fallback_provider_id`、`cohort_fallback_model`。主提供商调用失败时，若开启备用路由则按对应功能重试一次；主备均失败才降级为静态文案。失败日志不得包含 API Key。
+
+## 六、操作审计日志接口（仅限 `ADMIN`）
+
+* `GET /api/admin/audit-logs` — 查询关键管理操作记录。
+  * 查询参数：`keyword`、`actionType`、`resourceType`、`startTime`、`endTime`、`page`、`pageSize`。
+  * 返回：`{ items, total, page, pageSize }`。
+  * 审计记录不得包含密码、Token、完整 API Key 或其他敏感凭证。
+
 ### 8.1 LLM 提供商管理（多提供商，`/api/admin/llm-providers`）
 * `GET /api/admin/llm-providers` — 列表（脱敏）：`[{ id, name, baseUrl, hasApiKey, apiKeyTail, enabled, updatedAt }]`
 * `POST /api/admin/llm-providers` — 新增：`{ name, baseUrl, apiKey, enabled }`（name/baseUrl 必填）

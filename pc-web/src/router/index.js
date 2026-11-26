@@ -52,6 +52,12 @@ const router = createRouter({
           name: 'ai-settings',
           component: () => import('@/views/AiSettingsView.vue'),
           meta: { title: '智能分析配置' }
+        },
+        {
+          path: 'audit-logs',
+          name: 'audit-logs',
+          component: () => import('@/views/AuditLogView.vue'),
+          meta: { title: '操作日志' }
         }
       ]
     },

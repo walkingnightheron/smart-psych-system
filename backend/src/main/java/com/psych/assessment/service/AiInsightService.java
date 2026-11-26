@@ -50,6 +50,7 @@ public class AiInsightService {
     static final String REASON_REPORT_FAILED = "AI 解读暂时不可用";
     static final String REASON_COHORT_FAILED = "AI 洞察暂时不可用";
     static final String REASON_NO_COHORT_DATA = "暂无足够的统计数据生成群体洞察";
+    static final String FALLBACK_FAILED_NOTE = "主服务失败，已尝试备用服务";
 
     private static final String REPORT_SYSTEM_PROMPT =
             "你是高校心理健康教育中心的AI助手，为大学生撰写心理测评结果的个性化解读。必须遵守："
@@ -115,18 +116,30 @@ public class AiInsightService {
             return unavailable(resolveReason("报告解读", cfg.getReportProviderId(), cfg.getReportModel()));
         }
 
+        boolean fallbackEnabled = enabled(cfg.getFallbackEnabled());
+        Long fallbackProviderId = fallbackEnabled ? cfg.getReportFallbackProviderId() : null;
+
         try {
             String userPrompt = buildReportUserPrompt(report);
-            String content = llmClient.chat(route.provider.getBaseUrl(), route.provider.getApiKey(), route.model,
-                    route.temperature, route.maxTokens, route.timeout, REPORT_SYSTEM_PROMPT, userPrompt);
-            cacheRepository.upsert(cacheKey, content, route.model);
+            ChatOutcome outcome = chatWithFallback("报告解读", route, fallbackProviderId,
+                    cfg.getReportFallbackModel(), cfg.getReportTemperature(), cfg.getReportMaxTokens(),
+                    REPORT_SYSTEM_PROMPT, userPrompt);
+            if (outcome.content == null) {
+                return unavailable(outcome.fallbackAttempted
+                        ? REASON_REPORT_FAILED + "（" + FALLBACK_FAILED_NOTE + "）"
+                        : (isAdmin && !outcome.primarySafeDetail.isEmpty()
+                                ? REASON_REPORT_FAILED + "（" + outcome.primarySafeDetail + "）"
+                                : REASON_REPORT_FAILED));
+            }
+            cacheRepository.upsert(cacheKey, outcome.content, outcome.model);
             LocalDateTime generatedAt = cacheRepository.findByKey(cacheKey)
                     .map(AiInsightCache::getGeneratedAt)
                     .orElseGet(LocalDateTime::now);
-            return available(content, route.model, generatedAt);
+            return available(outcome.content, outcome.model, generatedAt);
         } catch (Exception ex) {
             String safeDetail = safeReasonDetail(ex, route.provider.getApiKey());
-            log.warn("AI report interpretation failed: reportId={}, model={}, detail={}", reportId, route.model, safeDetail);
+            log.warn("AI report interpretation failed: reportId={}, model={}, errorType={}",
+                    reportId, route.model, ex.getClass().getSimpleName());
             return unavailable(isAdmin && !safeDetail.isEmpty() ? REASON_REPORT_FAILED + "（" + safeDetail + "）" : REASON_REPORT_FAILED);
         }
     }
@@ -162,18 +175,30 @@ public class AiInsightService {
             return unavailable(resolveReason("群体洞察", cfg.getCohortProviderId(), cfg.getCohortModel()));
         }
 
+        boolean fallbackEnabled = enabled(cfg.getFallbackEnabled());
+        Long fallbackProviderId = fallbackEnabled ? cfg.getCohortFallbackProviderId() : null;
+
         try {
             String userPrompt = buildCohortUserPrompt(stats);
-            String content = llmClient.chat(route.provider.getBaseUrl(), route.provider.getApiKey(), route.model,
-                    route.temperature, route.maxTokens, route.timeout, COHORT_SYSTEM_PROMPT, userPrompt);
-            cacheRepository.upsert(cacheKey, content, route.model);
+            ChatOutcome outcome = chatWithFallback("群体洞察", route, fallbackProviderId,
+                    cfg.getCohortFallbackModel(), cfg.getCohortTemperature(), cfg.getCohortMaxTokens(),
+                    COHORT_SYSTEM_PROMPT, userPrompt);
+            if (outcome.content == null) {
+                return unavailable(outcome.fallbackAttempted
+                        ? REASON_COHORT_FAILED + "（" + FALLBACK_FAILED_NOTE + "）"
+                        : (outcome.primarySafeDetail.isEmpty()
+                                ? REASON_COHORT_FAILED
+                                : REASON_COHORT_FAILED + "（" + outcome.primarySafeDetail + "）"));
+            }
+            cacheRepository.upsert(cacheKey, outcome.content, outcome.model);
             LocalDateTime generatedAt = cacheRepository.findByKey(cacheKey)
                     .map(AiInsightCache::getGeneratedAt)
                     .orElseGet(LocalDateTime::now);
-            return available(content, route.model, generatedAt);
+            return available(outcome.content, outcome.model, generatedAt);
         } catch (Exception ex) {
             String safeDetail = safeReasonDetail(ex, route.provider.getApiKey());
-            log.warn("AI cohort insight failed: activityId={}, model={}, detail={}", activityId, route.model, safeDetail);
+            log.warn("AI cohort insight failed: activityId={}, model={}, errorType={}",
+                    activityId, route.model, ex.getClass().getSimpleName());
             return unavailable(safeDetail.isEmpty() ? REASON_COHORT_FAILED : REASON_COHORT_FAILED + "（" + safeDetail + "）");
         }
     }
@@ -188,6 +213,57 @@ public class AiInsightService {
         }
         safe = safe.replaceAll("\\s+", " ").trim();
         return safe.length() > 160 ? safe.substring(0, 160) : safe;
+    }
+
+    /**
+     * 主提供商失败后按备用 providerId/model 再试一次，仍失败才降级。
+     * 失败日志只记录 providerId/model/errorType，绝不记录 Key；异常消息已脱敏（safeReasonDetail）。
+     */
+    private ChatOutcome chatWithFallback(String label, Route main, Long fallbackProviderId, String fallbackModel,
+                                         BigDecimal temperature, Integer maxTokens,
+                                         String systemPrompt, String userPrompt) {
+        try {
+            String content = llmClient.chat(main.provider.getBaseUrl(), main.provider.getApiKey(), main.model,
+                    main.temperature, main.maxTokens, main.timeout, systemPrompt, userPrompt);
+            return new ChatOutcome(content, main.model, false, "");
+        } catch (Exception primaryEx) {
+            log.warn("AI primary provider failed: feature={}, providerId={}, model={}, errorType={}",
+                    label, main.provider.getId(), main.model, primaryEx.getClass().getSimpleName());
+            String primarySafeDetail = safeReasonDetail(primaryEx, main.provider.getApiKey());
+            if (fallbackProviderId == null) {
+                return new ChatOutcome(null, null, false, primarySafeDetail);
+            }
+            Route fallback = resolve(label, fallbackProviderId, fallbackModel, temperature, maxTokens);
+            if (fallback == null) {
+                log.warn("AI fallback route unavailable: feature={}, fallbackProviderId={}, fallbackModel={}",
+                        label, fallbackProviderId, fallbackModel);
+                return new ChatOutcome(null, null, true, primarySafeDetail);
+            }
+            try {
+                String content = llmClient.chat(fallback.provider.getBaseUrl(), fallback.provider.getApiKey(),
+                        fallback.model, fallback.temperature, fallback.maxTokens, fallback.timeout,
+                        systemPrompt, userPrompt);
+                return new ChatOutcome(content, fallback.model, true, "");
+            } catch (Exception fallbackEx) {
+                log.warn("AI fallback provider failed: feature={}, providerId={}, model={}, errorType={}",
+                        label, fallback.provider.getId(), fallback.model, fallbackEx.getClass().getSimpleName());
+                return new ChatOutcome(null, null, true, "");
+            }
+        }
+    }
+
+    private static final class ChatOutcome {
+        final String content;
+        final String model;
+        final boolean fallbackAttempted;
+        final String primarySafeDetail;
+
+        ChatOutcome(String content, String model, boolean fallbackAttempted, String primarySafeDetail) {
+            this.content = content;
+            this.model = model;
+            this.fallbackAttempted = fallbackAttempted;
+            this.primarySafeDetail = primarySafeDetail;
+        }
     }
 
     private Route resolve(String label, Long providerId, String model, BigDecimal temperature, Integer maxTokens) {

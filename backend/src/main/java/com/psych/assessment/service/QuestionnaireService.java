@@ -28,6 +28,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -43,6 +44,7 @@ public class QuestionnaireService {
     private final QuestionnaireValidator validator;
     private final CacheService cacheService;
     private final ObjectMapper objectMapper;
+    private final AuditLogService auditLogService;
 
     public List<QuestionnaireListItemVO> listQuestionnaires() {
         List<Questionnaire> all = questionnaireRepository.findAll();
@@ -84,62 +86,86 @@ public class QuestionnaireService {
 
     @Transactional(rollbackFor = Exception.class)
     public QuestionnaireDetailVO createQuestionnaire(QuestionnaireUpsertRequest req) {
-        validator.validateUpsertRequest(req);
-        String code = req.getCode().trim();
-        if (questionnaireRepository.findByCode(code).isPresent()) {
-            throw new BizException(400, "问卷编码[" + code + "]已存在，请使用唯一编码");
+        String code = req == null ? null : (req.getCode() == null ? null : req.getCode().trim());
+        try {
+            validator.validateUpsertRequest(req);
+            if (questionnaireRepository.findByCode(code).isPresent()) {
+                throw new BizException(400, "问卷编码[" + code + "]已存在，请使用唯一编码");
+            }
+
+            List<QuestionConfig> sortedQuestions = normalizeQuestions(req.getQuestions());
+            ScoringRuleConfig rule = req.getScoringRule();
+            if (rule.getRuleVersion() == null || rule.getRuleVersion().isBlank()) {
+                rule.setRuleVersion("R-draft");
+            }
+
+            Long creatorId = AuthContext.requireUserId();
+            Long qId = questionnaireRepository.insert(Questionnaire.builder()
+                    .code(code)
+                    .title(req.getTitle().trim())
+                    .description(req.getDescription())
+                    .scoringRuleJson(writeJson(rule))
+                    .latestVersion(0)
+                    .creatorId(creatorId)
+                    .build());
+
+            questionRepository.insertAll(qId, toQuestionEntities(qId, sortedQuestions));
+            Map<String, Object> detail = new LinkedHashMap<>();
+            detail.put("code", code);
+            detail.put("title", req.getTitle().trim());
+            detail.put("questionCount", sortedQuestions.size());
+            auditLogService.recordSuccess(AuditLogService.ACT_QUESTIONNAIRE_CREATE,
+                    AuditLogService.RES_QUESTIONNAIRE, qId, "新建问卷[" + code + "]", detail);
+            return getQuestionnaireDraft(qId);
+        } catch (BizException ex) {
+            auditLogService.recordFailure(AuditLogService.ACT_QUESTIONNAIRE_CREATE,
+                    AuditLogService.RES_QUESTIONNAIRE, null, "新建问卷失败[" + code + "]: " + ex.getMessage(), null);
+            throw ex;
         }
-
-        List<QuestionConfig> sortedQuestions = normalizeQuestions(req.getQuestions());
-        ScoringRuleConfig rule = req.getScoringRule();
-        if (rule.getRuleVersion() == null || rule.getRuleVersion().isBlank()) {
-            rule.setRuleVersion("R-draft");
-        }
-
-        Long creatorId = AuthContext.requireUserId();
-        Long qId = questionnaireRepository.insert(Questionnaire.builder()
-                .code(code)
-                .title(req.getTitle().trim())
-                .description(req.getDescription())
-                .scoringRuleJson(writeJson(rule))
-                .latestVersion(0)
-                .creatorId(creatorId)
-                .build());
-
-        questionRepository.insertAll(qId, toQuestionEntities(qId, sortedQuestions));
-        return getQuestionnaireDraft(qId);
     }
 
     @Transactional(rollbackFor = Exception.class)
     public QuestionnaireDetailVO updateQuestionnaireDraft(Long id, QuestionnaireUpsertRequest req) {
-        Questionnaire existing = questionnaireRepository.findById(id)
-                .orElseThrow(() -> new BizException(404, "问卷不存在: id=" + id));
-        validator.validateUpsertRequest(req);
+        String code = req == null ? null : (req.getCode() == null ? null : req.getCode().trim());
+        try {
+            Questionnaire existing = questionnaireRepository.findById(id)
+                    .orElseThrow(() -> new BizException(404, "问卷不存在: id=" + id));
+            validator.validateUpsertRequest(req);
 
-        String code = req.getCode().trim();
-        Optional<Questionnaire> byCode = questionnaireRepository.findByCode(code);
-        if (byCode.isPresent() && !byCode.get().getId().equals(id)) {
-            throw new BizException(400, "问卷编码[" + code + "]已被其他问卷占用");
+            Optional<Questionnaire> byCode = questionnaireRepository.findByCode(code);
+            if (byCode.isPresent() && !byCode.get().getId().equals(id)) {
+                throw new BizException(400, "问卷编码[" + code + "]已被其他问卷占用");
+            }
+
+            List<QuestionConfig> sortedQuestions = normalizeQuestions(req.getQuestions());
+            ScoringRuleConfig rule = req.getScoringRule();
+            if (rule.getRuleVersion() == null || rule.getRuleVersion().isBlank()) {
+                rule.setRuleVersion("R-v" + (existing.getLatestVersion() + 1));
+            }
+
+            // REQ03: Strictly update draft tables ONLY — never modify questionnaire_version!
+            questionnaireRepository.updateDraft(
+                    id,
+                    code,
+                    req.getTitle().trim(),
+                    req.getDescription(),
+                    writeJson(rule)
+            );
+            questionRepository.deleteByQuestionnaireId(id);
+            questionRepository.insertAll(id, toQuestionEntities(id, sortedQuestions));
+
+            Map<String, Object> detail = new LinkedHashMap<>();
+            detail.put("code", code);
+            detail.put("title", req.getTitle().trim());
+            detail.put("questionCount", sortedQuestions.size());
+            auditLogService.recordSuccess(AuditLogService.ACT_QUESTIONNAIRE_UPDATE_DRAFT,
+                    AuditLogService.RES_QUESTIONNAIRE, id, "修改问卷草稿[" + code + "]", detail);
+            return getQuestionnaireDraft(id);
+        } catch (BizException ex) {
+            auditLogService.recordFailure(AuditLogService.ACT_QUESTIONNAIRE_UPDATE_DRAFT,
+                    AuditLogService.RES_QUESTIONNAIRE, id, "修改问卷草稿失败[" + code + "]: " + ex.getMessage(), null);
+            throw ex;
         }
-
-        List<QuestionConfig> sortedQuestions = normalizeQuestions(req.getQuestions());
-        ScoringRuleConfig rule = req.getScoringRule();
-        if (rule.getRuleVersion() == null || rule.getRuleVersion().isBlank()) {
-            rule.setRuleVersion("R-v" + (existing.getLatestVersion() + 1));
-        }
-
-        // REQ03: Strictly update draft tables ONLY — never modify questionnaire_version!
-        questionnaireRepository.updateDraft(
-                id,
-                code,
-                req.getTitle().trim(),
-                req.getDescription(),
-                writeJson(rule)
-        );
-        questionRepository.deleteByQuestionnaireId(id);
-        questionRepository.insertAll(id, toQuestionEntities(id, sortedQuestions));
-
-        return getQuestionnaireDraft(id);
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -184,6 +210,13 @@ public class QuestionnaireService {
 
         QuestionnaireVersion saved = versionRepository.findById(versionId)
                 .orElseThrow(() -> new BizException(500, "快照版本读取失败"));
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("code", draft.getCode());
+        detail.put("versionId", versionId);
+        detail.put("versionNum", nextVer);
+        detail.put("ruleVersion", ruleVersion);
+        auditLogService.recordSuccess(AuditLogService.ACT_QUESTIONNAIRE_PUBLISH,
+                AuditLogService.RES_QUESTIONNAIRE, questionnaireId, "发布问卷版本[" + draft.getCode() + "] V" + nextVer, detail);
         return toVersionVO(saved, draft.getCode(), "MISS_DB");
     }
 

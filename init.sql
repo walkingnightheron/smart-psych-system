@@ -149,11 +149,16 @@ CREATE TABLE IF NOT EXISTS llm_config (
     report_model VARCHAR(128) NOT NULL DEFAULT '',
     report_temperature DECIMAL(3,2) NOT NULL DEFAULT 0.70,
     report_max_tokens INT NOT NULL DEFAULT 800,
+    report_fallback_provider_id BIGINT,
+    report_fallback_model VARCHAR(128) NOT NULL DEFAULT '',
     cohort_insight_enabled TINYINT NOT NULL DEFAULT 1,
     cohort_provider_id BIGINT,
     cohort_model VARCHAR(128) NOT NULL DEFAULT '',
     cohort_temperature DECIMAL(3,2) NOT NULL DEFAULT 0.70,
     cohort_max_tokens INT NOT NULL DEFAULT 800,
+    cohort_fallback_provider_id BIGINT,
+    cohort_fallback_model VARCHAR(128) NOT NULL DEFAULT '',
+    fallback_enabled TINYINT NOT NULL DEFAULT 0,
     timeout_seconds INT NOT NULL DEFAULT 30,
     updated_by BIGINT,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -169,3 +174,22 @@ CREATE TABLE IF NOT EXISTS ai_insight_cache (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AI 洞察缓存表';
 
 INSERT INTO llm_config (id) SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM llm_config WHERE id = 1);
+
+-- 13. 管理操作审计日志
+CREATE TABLE IF NOT EXISTS audit_log (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    operator_id BIGINT,
+    operator_username VARCHAR(64),
+    operator_real_name VARCHAR(64),
+    action_type VARCHAR(64) NOT NULL,
+    resource_type VARCHAR(64) NOT NULL,
+    resource_id BIGINT,
+    summary VARCHAR(255),
+    detail_json TEXT,
+    ip_address VARCHAR(64),
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_audit_created (created_at),
+    INDEX idx_audit_operator (operator_id),
+    INDEX idx_audit_resource (resource_type, resource_id),
+    INDEX idx_audit_action (action_type)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='管理操作审计日志';

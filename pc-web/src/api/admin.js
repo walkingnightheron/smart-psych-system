@@ -156,6 +156,20 @@ export function getReportAiInterpretationApi(reportId, config = {}) {
   return request.get(`/admin/reports/${reportId}/ai-interpretation`, { timeout: 130000, ...config })
 }
 
+// ==================== 操作日志审计 ====================
+export function getAuditLogsApi(params = {}, config = {}) {
+  const cleanParams = {}
+  for (const key of ['keyword', 'actionType', 'resourceType', 'startTime', 'endTime']) {
+    const val = params?.[key]
+    if (val !== undefined && val !== null && String(val).trim()) {
+      cleanParams[key] = String(val).trim()
+    }
+  }
+  cleanParams.page = Number(params?.page) > 0 ? Number(params.page) : 1
+  cleanParams.pageSize = Number(params?.pageSize) > 0 ? Number(params.pageSize) : 20
+  return request.get('/admin/audit-logs', { params: cleanParams, ...config })
+}
+
 // ==================== 学生名册与 XLSX 导入/导出 (Section 7) ====================
 export function downloadQuestionnaireTemplateApi() {
   return downloadBlob('/admin/templates/questionnaire.xlsx', '心理测评问卷导入模板.xlsx')

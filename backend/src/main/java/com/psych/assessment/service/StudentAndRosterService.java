@@ -61,6 +61,9 @@ public class StudentAndRosterService {
     public static final String RESET_CUSTOM_PASSWORD_HINT = "密码已重置为自定义密码";
     public static final String RESET_DERIVED_PASSWORD_HINT = "密码已重置为学号后6位（不足6位取完整学号）";
 
+    private static final java.util.regex.Pattern WHOLE_FLOAT_USERNAME =
+            java.util.regex.Pattern.compile("^(\\d+)\\.0+$");
+
     private final SysUserRepository userRepository;
     private final ActivityParticipantRepository participantRepository;
     private final AnswerSheetRepository sheetRepository;
@@ -69,6 +72,7 @@ public class StudentAndRosterService {
     private final CacheService cacheService;
     private final PasswordEncoder passwordEncoder;
     private final XlsxTemplateAndCodec codec;
+    private final AuditLogService auditLogService;
 
     /**
      * 初始密码规则（契约 7.4）：学号后 6 位，不足 6 位取完整学号。
@@ -118,6 +122,9 @@ public class StudentAndRosterService {
         if (username.length() > 64) {
             throw new BizException(400, "学号[username]长度不能超过64个字符");
         }
+        if (username.contains(".")) {
+            throw new BizException(400, "学号[" + username + "]不能包含小数点，请填写整数或字母数字组合的学号");
+        }
         if (userRepository.findByUsername(username).isPresent()) {
             throw new BizException(400, "学号[" + username + "]已存在");
         }
@@ -148,6 +155,12 @@ public class StudentAndRosterService {
                 .build());
         SysUser created = userRepository.findById(newId)
                 .orElseThrow(() -> new BizException(500, "学生账号创建失败: " + username));
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("username", username);
+        detail.put("realName", realName);
+        detail.put("deptClass", deptClass);
+        auditLogService.recordSuccess(AuditLogService.ACT_STUDENT_CREATE,
+                AuditLogService.RES_STUDENT, newId, "新建学生[" + username + "]", detail);
         return buildRosterItem(created);
     }
 
@@ -178,6 +191,12 @@ public class StudentAndRosterService {
         }
         userRepository.updateStudentFull(id, realName, deptClass, phone,
                 status == null ? user.getStatus() : status);
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("username", user.getUsername());
+        detail.put("realName", realName);
+        detail.put("deptClass", deptClass);
+        auditLogService.recordSuccess(AuditLogService.ACT_STUDENT_UPDATE,
+                AuditLogService.RES_STUDENT, id, "修改学生[" + user.getUsername() + "]", detail);
         return reloadRosterItem(id);
     }
 
@@ -188,6 +207,8 @@ public class StudentAndRosterService {
             throw new BizException(400, "账号状态[status]仅允许0(禁用)或1(正常)");
         }
         userRepository.updateStatus(id, status);
+        auditLogService.recordSuccess(AuditLogService.ACT_STUDENT_STATUS,
+                AuditLogService.RES_STUDENT, id, (status == 1 ? "启用学生[" : "禁用学生[") + id + "]", null);
         return reloadRosterItem(id);
     }
 
@@ -198,6 +219,9 @@ public class StudentAndRosterService {
         String rawPassword = resolveStudentPassword(customPassword, user.getUsername());
         String hint = customPassword == null ? RESET_DERIVED_PASSWORD_HINT : RESET_CUSTOM_PASSWORD_HINT;
         userRepository.updatePasswordHash(id, passwordEncoder.encode(rawPassword));
+        // 审计只记录用户名与重置策略，绝不记录明文/密文密码
+        auditLogService.recordSuccess(AuditLogService.ACT_STUDENT_RESET_PASSWORD,
+                AuditLogService.RES_STUDENT, id, "重置学生[" + user.getUsername() + "]密码", null);
         return ResetPasswordResultVO.builder()
                 .id(user.getId())
                 .username(user.getUsername())
@@ -224,6 +248,8 @@ public class StudentAndRosterService {
         for (Long actId : draftActIds) {
             cacheService.evictKey(CacheService.activityKey(actId));
         }
+        auditLogService.recordSuccess(AuditLogService.ACT_STUDENT_DELETE,
+                AuditLogService.RES_STUDENT, id, "删除学生[" + id + "]", null);
     }
 
     private SysUser requireStudent(Long id, String nonStudentMessage) {
@@ -317,6 +343,8 @@ public class StudentAndRosterService {
         }
 
         if (!errors.isEmpty()) {
+            auditLogService.recordFailure(AuditLogService.ACT_XLSX_IMPORT,
+                    AuditLogService.RES_STUDENT, null, "学生名册XLSX导入校验失败(" + errors.size() + "处错误)", null);
             throw new BizException(
                     400,
                     "XLSX校验未通过，共发现 " + errors.size() + " 处错误，请修正后重新上传",
@@ -345,13 +373,21 @@ public class StudentAndRosterService {
                     row.phone);
         }
 
-        return StudentImportResultVO.builder()
+        StudentImportResultVO result = StudentImportResultVO.builder()
                 .totalRows(data.rows.size())
                 .createdCount(toCreate.size())
                 .updatedCount(toUpdate.size())
                 .skippedCount(toSkip.size())
                 .passwordRuleHint(STUDENT_PASSWORD_HINT)
                 .build();
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("totalRows", result.getTotalRows());
+        detail.put("createdCount", result.getCreatedCount());
+        detail.put("updatedCount", result.getUpdatedCount());
+        detail.put("skippedCount", result.getSkippedCount());
+        auditLogService.recordSuccess(AuditLogService.ACT_XLSX_IMPORT,
+                AuditLogService.RES_STUDENT, null, "学生名册XLSX导入", detail);
+        return result;
     }
 
     // ==================================================================
@@ -404,6 +440,9 @@ public class StudentAndRosterService {
         }
 
         if (!errors.isEmpty()) {
+            auditLogService.recordFailure(AuditLogService.ACT_ACTIVITY_ROSTER_IMPORT,
+                    AuditLogService.RES_ACTIVITY, activityId,
+                    "活动名单XLSX导入校验失败(" + errors.size() + "处错误)", null);
             throw new BizException(
                     400,
                     "XLSX校验未通过，共发现 " + errors.size() + " 处错误，请修正后重新上传",
@@ -456,7 +495,7 @@ public class StudentAndRosterService {
         // 名单变化立即失效活动缓存（REQ09）
         cacheService.evictKey(CacheService.activityKey(activityId));
 
-        return ParticipantImportResultVO.builder()
+        ParticipantImportResultVO result = ParticipantImportResultVO.builder()
                 .activityId(activityId)
                 .mode(normalizedMode)
                 .totalRows(data.rows.size())
@@ -466,6 +505,14 @@ public class StudentAndRosterService {
                 .currentParticipantCount(finalUserIds.size())
                 .passwordRuleHint(PARTICIPANT_PASSWORD_HINT)
                 .build();
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("mode", normalizedMode);
+        detail.put("addedCount", addedCount);
+        detail.put("createdUserCount", createdUserCount);
+        detail.put("currentParticipantCount", finalUserIds.size());
+        auditLogService.recordSuccess(AuditLogService.ACT_ACTIVITY_ROSTER_IMPORT,
+                AuditLogService.RES_ACTIVITY, activityId, "活动[" + activityId + "]目标名单XLSX导入", detail);
+        return result;
     }
 
     // ==================================================================
@@ -521,15 +568,27 @@ public class StudentAndRosterService {
                 String username = textAt(row, colUsername, formatter);
                 if (username.isEmpty()) {
                     errors.add(error(sheetName, excelRow, "学号", "学号不能为空"));
-                } else if (username.length() > 64) {
-                    errors.add(error(sheetName, excelRow, "学号", "学号长度不能超过64个字符"));
                 } else {
-                    Integer firstRow = firstRowOfUsername.putIfAbsent(username, excelRow);
-                    if (firstRow != null) {
-                        errors.add(error(sheetName, excelRow, "学号",
-                                "学号[" + username + "]在文件内重复（首次出现于第" + firstRow + "行）"));
+                    // Excel 数值列经公式（如 ÷11）计算后会产生小数，形如 2505224225.36364；
+                    // 整数值（xxx.0）自动归一为整数，非整数小数直接拦截，避免脏学号入库。
+                    java.util.regex.Matcher whole = WHOLE_FLOAT_USERNAME.matcher(username);
+                    if (whole.matches()) {
+                        username = whole.group(1);
                     }
-                    parsed.username = username;
+                    if (username.contains(".")) {
+                        errors.add(error(sheetName, excelRow, "学号",
+                                "学号[" + username + "]包含小数点，学号应为整数或字母数字组合；"
+                                        + "请将 Excel 中「学号」列设为文本格式后重新填写"));
+                    } else if (username.length() > 64) {
+                        errors.add(error(sheetName, excelRow, "学号", "学号长度不能超过64个字符"));
+                    } else {
+                        Integer firstRow = firstRowOfUsername.putIfAbsent(username, excelRow);
+                        if (firstRow != null) {
+                            errors.add(error(sheetName, excelRow, "学号",
+                                    "学号[" + username + "]在文件内重复（首次出现于第" + firstRow + "行）"));
+                        }
+                        parsed.username = username;
+                    }
                 }
 
                 parsed.realName = textAt(row, colRealName, formatter);

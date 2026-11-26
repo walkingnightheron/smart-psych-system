@@ -37,6 +37,7 @@ public class LlmRoutingService {
     private final LlmConfigRepository llmConfigRepository;
     private final LlmProviderRepository providerRepository;
     private final LlmClient llmClient;
+    private final AuditLogService auditLogService;
 
     public LlmConfigVO getConfig() {
         return toVO(loadOrCreateConfig());
@@ -76,6 +77,16 @@ public class LlmRoutingService {
                 ? orDefault(current.getTimeoutSeconds(), 30)
                 : req.getTimeoutSeconds();
 
+        int fallbackEnabled = req.getFallbackEnabled() == null
+                ? flag(current.getFallbackEnabled(), 0)
+                : (req.getFallbackEnabled() ? 1 : 0);
+        Long reportFallbackProviderId = req.getReportFallbackProviderId();
+        String reportFallbackModel = req.getReportFallbackModel() == null
+                ? current.getReportFallbackModel() : req.getReportFallbackModel().trim();
+        Long cohortFallbackProviderId = req.getCohortFallbackProviderId();
+        String cohortFallbackModel = req.getCohortFallbackModel() == null
+                ? current.getCohortFallbackModel() : req.getCohortFallbackModel().trim();
+
         validateTemperature("reportTemperature", reportTemp);
         validateTemperature("cohortTemperature", cohortTemp);
         validateMaxTokens("reportMaxTokens", reportMaxTokens);
@@ -87,6 +98,15 @@ public class LlmRoutingService {
         }
         if (cohortEnabled == 1) {
             validateRouting("群体洞察", cohortProviderId, cohortModel);
+        }
+        // 启用备用路由时校验：provider 存在、enabled、model 非空（仅校验已绑定的备用路由）
+        if (fallbackEnabled == 1) {
+            if (reportFallbackProviderId != null) {
+                validateRouting("报告解读备用路由", reportFallbackProviderId, reportFallbackModel);
+            }
+            if (cohortFallbackProviderId != null) {
+                validateRouting("群体洞察备用路由", cohortFallbackProviderId, cohortFallbackModel);
+            }
         }
 
         LlmConfig updated = LlmConfig.builder()
@@ -101,12 +121,21 @@ public class LlmRoutingService {
                 .cohortModel(cohortModel == null ? "" : cohortModel)
                 .cohortTemperature(cohortTemp.setScale(2, RoundingMode.HALF_UP))
                 .cohortMaxTokens(cohortMaxTokens)
+                .reportFallbackProviderId(reportFallbackProviderId)
+                .reportFallbackModel(reportFallbackModel == null ? "" : reportFallbackModel)
+                .cohortFallbackProviderId(cohortFallbackProviderId)
+                .cohortFallbackModel(cohortFallbackModel == null ? "" : cohortFallbackModel)
+                .fallbackEnabled(fallbackEnabled)
                 .timeoutSeconds(timeoutSeconds)
                 .updatedBy(adminId)
                 .build();
         llmConfigRepository.upsert(updated);
-        log.info("LLM routing config saved: adminId={}, reportEnabled={}, cohortEnabled={}",
-                adminId, reportEnabled, cohortEnabled);
+        log.info("LLM routing config saved: adminId={}, reportEnabled={}, cohortEnabled={}, fallbackEnabled={}",
+                adminId, reportEnabled, cohortEnabled, fallbackEnabled);
+        auditLogService.recordSuccess(AuditLogService.ACT_LLM_ROUTING_SAVE,
+                AuditLogService.RES_LLM_CONFIG, LlmConfigRepository.SINGLETON_ID, "保存AI路由配置",
+                routingDetail(reportEnabled, cohortEnabled, fallbackEnabled, reportProviderId, cohortProviderId,
+                        reportFallbackProviderId, cohortFallbackProviderId));
         return toVO(llmConfigRepository.findSingle().orElse(updated));
     }
 
@@ -174,6 +203,11 @@ public class LlmRoutingService {
                 .cohortModel("")
                 .cohortTemperature(new BigDecimal("0.70"))
                 .cohortMaxTokens(800)
+                .reportFallbackProviderId(null)
+                .reportFallbackModel("")
+                .cohortFallbackProviderId(null)
+                .cohortFallbackModel("")
+                .fallbackEnabled(0)
                 .timeoutSeconds(30)
                 .build();
         llmConfigRepository.upsert(fallback);
@@ -227,6 +261,13 @@ public class LlmRoutingService {
                 .cohortModel(cfg.getCohortModel())
                 .cohortTemperature(cfg.getCohortTemperature())
                 .cohortMaxTokens(cfg.getCohortMaxTokens())
+                .fallbackEnabled(cfg.getFallbackEnabled() != null && cfg.getFallbackEnabled() == 1)
+                .reportFallbackProviderId(cfg.getReportFallbackProviderId())
+                .reportFallbackProviderName(providerName(cfg.getReportFallbackProviderId()))
+                .reportFallbackModel(cfg.getReportFallbackModel())
+                .cohortFallbackProviderId(cfg.getCohortFallbackProviderId())
+                .cohortFallbackProviderName(providerName(cfg.getCohortFallbackProviderId()))
+                .cohortFallbackModel(cfg.getCohortFallbackModel())
                 .timeoutSeconds(cfg.getTimeoutSeconds())
                 .updatedAt(cfg.getUpdatedAt())
                 .build();
@@ -237,6 +278,21 @@ public class LlmRoutingService {
             return null;
         }
         return providerRepository.findById(id).map(LlmProvider::getName).orElse(null);
+    }
+
+    /** 路由配置审计明细：仅含开关与 providerId，绝不含任何密钥。 */
+    private java.util.Map<String, Object> routingDetail(int reportEnabled, int cohortEnabled, int fallbackEnabled,
+                                                        Long reportProviderId, Long cohortProviderId,
+                                                        Long reportFallbackProviderId, Long cohortFallbackProviderId) {
+        java.util.Map<String, Object> detail = new java.util.LinkedHashMap<>();
+        detail.put("reportInsightEnabled", reportEnabled == 1);
+        detail.put("reportProviderId", reportProviderId);
+        detail.put("cohortInsightEnabled", cohortEnabled == 1);
+        detail.put("cohortProviderId", cohortProviderId);
+        detail.put("fallbackEnabled", fallbackEnabled == 1);
+        detail.put("reportFallbackProviderId", reportFallbackProviderId);
+        detail.put("cohortFallbackProviderId", cohortFallbackProviderId);
+        return detail;
     }
 
     private LlmTestResultVO fail(String model, String error) {

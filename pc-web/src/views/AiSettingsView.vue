@@ -61,6 +61,11 @@ const routeConfig = reactive({
   cohortModel: '',
   cohortTemperature: 0.7,
   cohortMaxTokens: 800,
+  fallbackEnabled: false,
+  reportFallbackProviderId: null,
+  reportFallbackModel: '',
+  cohortFallbackProviderId: null,
+  cohortFallbackModel: '',
   timeoutSeconds: 30
 })
 const configLoading = ref(false)
@@ -217,6 +222,11 @@ function applyConfig(vo) {
   routeConfig.cohortModel = vo.cohortModel ?? ''
   routeConfig.cohortTemperature = Number(vo.cohortTemperature ?? 0.7)
   routeConfig.cohortMaxTokens = Number(vo.cohortMaxTokens ?? 800)
+  routeConfig.fallbackEnabled = Boolean(vo.fallbackEnabled)
+  routeConfig.reportFallbackProviderId = vo.reportFallbackProviderId ?? null
+  routeConfig.reportFallbackModel = vo.reportFallbackModel ?? ''
+  routeConfig.cohortFallbackProviderId = vo.cohortFallbackProviderId ?? null
+  routeConfig.cohortFallbackModel = vo.cohortFallbackModel ?? ''
   routeConfig.timeoutSeconds = Number(vo.timeoutSeconds ?? 30)
   configUpdatedAt.value = vo.updatedAt ?? ''
 }
@@ -264,6 +274,41 @@ async function handleCohortProviderChange() {
   }
 }
 
+async function handleReportFallbackProviderChange() {
+  routeConfig.reportFallbackModel = ''
+  if (routeConfig.reportFallbackProviderId) {
+    await fetchModelsForSelect(routeConfig.reportFallbackProviderId)
+  }
+}
+
+async function handleCohortFallbackProviderChange() {
+  routeConfig.cohortFallbackModel = ''
+  if (routeConfig.cohortFallbackProviderId) {
+    await fetchModelsForSelect(routeConfig.cohortFallbackProviderId)
+  }
+}
+
+// 主备完全相同（提供商 + 模型）时提示避免：主路由故障时备用大概率同样不可用
+const reportFallbackSameAsPrimary = computed(() => {
+  if (!routeConfig.fallbackEnabled || routeConfig.reportFallbackProviderId == null) return false
+  const fallbackModel = routeConfig.reportFallbackModel?.trim() || ''
+  return (
+    fallbackModel !== '' &&
+    routeConfig.reportFallbackProviderId === routeConfig.reportProviderId &&
+    fallbackModel === (routeConfig.reportModel?.trim() || '')
+  )
+})
+
+const cohortFallbackSameAsPrimary = computed(() => {
+  if (!routeConfig.fallbackEnabled || routeConfig.cohortFallbackProviderId == null) return false
+  const fallbackModel = routeConfig.cohortFallbackModel?.trim() || ''
+  return (
+    fallbackModel !== '' &&
+    routeConfig.cohortFallbackProviderId === routeConfig.cohortProviderId &&
+    fallbackModel === (routeConfig.cohortModel?.trim() || '')
+  )
+})
+
 function collectConfigPayload() {
   return {
     reportInsightEnabled: routeConfig.reportInsightEnabled,
@@ -276,11 +321,33 @@ function collectConfigPayload() {
     cohortModel: routeConfig.cohortModel?.trim() || '',
     cohortTemperature: routeConfig.cohortTemperature,
     cohortMaxTokens: routeConfig.cohortMaxTokens,
+    fallbackEnabled: routeConfig.fallbackEnabled,
+    reportFallbackProviderId: routeConfig.reportFallbackProviderId,
+    reportFallbackModel: routeConfig.reportFallbackModel?.trim() || '',
+    cohortFallbackProviderId: routeConfig.cohortFallbackProviderId,
+    cohortFallbackModel: routeConfig.cohortFallbackModel?.trim() || '',
     timeoutSeconds: routeConfig.timeoutSeconds
   }
 }
 
 async function handleSaveConfig() {
+  // 与服务端校验对齐：启用备用路由时，已绑定提供商的分组必须填写模型；未绑定的分组允许留空
+  if (routeConfig.fallbackEnabled) {
+    if (routeConfig.reportFallbackProviderId && !routeConfig.reportFallbackModel?.trim()) {
+      ElMessage.warning('已为报告解读选择备用提供商，请填写备用模型后再保存')
+      return
+    }
+    if (routeConfig.cohortFallbackProviderId && !routeConfig.cohortFallbackModel?.trim()) {
+      ElMessage.warning('已为群体洞察选择备用提供商，请填写备用模型后再保存')
+      return
+    }
+  }
+  const sameTips = []
+  if (reportFallbackSameAsPrimary.value) sameTips.push('报告解读')
+  if (cohortFallbackSameAsPrimary.value) sameTips.push('群体洞察')
+  if (sameTips.length > 0) {
+    ElMessage.warning(`${sameTips.join('、')}的备用路由与主路由完全相同，降级意义有限，建议更换备用组合`)
+  }
   configSaving.value = true
   try {
     const res = await saveLlmConfigApi(collectConfigPayload())
@@ -292,10 +359,24 @@ async function handleSaveConfig() {
 }
 
 async function handleTestRoute(target) {
-  const isReport = target === 'report'
-  const label = isReport ? '报告个性化解读' : '活动群体洞察'
-  const providerId = isReport ? routeConfig.reportProviderId : routeConfig.cohortProviderId
-  const model = isReport ? routeConfig.reportModel : routeConfig.cohortModel
+  const isReport = target === 'report' || target === 'reportFallback'
+  const isFallback = target === 'reportFallback' || target === 'cohortFallback'
+  const label =
+    (isReport ? '报告个性化解读' : '活动群体洞察') + (isFallback ? ' · 备用路由' : '')
+  const providerId = isFallback
+    ? isReport
+      ? routeConfig.reportFallbackProviderId
+      : routeConfig.cohortFallbackProviderId
+    : isReport
+      ? routeConfig.reportProviderId
+      : routeConfig.cohortProviderId
+  const model = isFallback
+    ? isReport
+      ? routeConfig.reportFallbackModel
+      : routeConfig.cohortFallbackModel
+    : isReport
+      ? routeConfig.reportModel
+      : routeConfig.cohortModel
   if (!providerId || !model) {
     ElMessage.warning(`请先在「${label}」中选择提供商与模型`)
     return
@@ -396,10 +477,20 @@ onMounted(() => {
       <div class="panel-header">
         <div class="panel-title-wrap">
           <h3 class="panel-title">AI 功能路由</h3>
-          <span class="panel-subtitle">分别为报告解读与群体洞察指定模型与生成参数</span>
+          <span class="panel-subtitle">分别为报告解读与群体洞察指定模型、生成参数与备用降级路由</span>
         </div>
       </div>
       <div class="panel-body">
+        <div class="fallback-global-bar">
+          <div class="fallback-global-left">
+            <span class="fallback-global-label">备用路由（自动降级）</span>
+            <el-switch v-model="routeConfig.fallbackEnabled" />
+          </div>
+          <span class="inline-hint">
+            开启后主路由调用失败时自动切换至备用提供商与模型；每组备用可留空，留空的功能不参与降级
+          </span>
+        </div>
+
         <div class="route-grid">
           <!-- 报告解读 -->
           <div class="route-card">
@@ -469,6 +560,60 @@ onMounted(() => {
                 />
                 <span class="inline-hint">1 ~ 4096</span>
               </el-form-item>
+
+              <div class="fallback-divider">
+                <span>备用路由（主路由失败时自动降级）</span>
+                <el-button
+                  v-if="routeConfig.fallbackEnabled"
+                  link
+                  type="primary"
+                  size="small"
+                  :loading="configTesting"
+                  @click="handleTestRoute('reportFallback')"
+                >
+                  测试备用连接
+                </el-button>
+              </div>
+              <el-form-item label="备用提供商">
+                <el-select
+                  v-model="routeConfig.reportFallbackProviderId"
+                  placeholder="可选，留空则该功能不降级"
+                  clearable
+                  :disabled="!routeConfig.fallbackEnabled"
+                  style="width: 100%"
+                  @change="handleReportFallbackProviderChange"
+                >
+                  <el-option
+                    v-for="p in enabledProviders"
+                    :key="p.id"
+                    :value="p.id"
+                    :label="p.name"
+                  />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="备用模型">
+                <el-select
+                  v-model="routeConfig.reportFallbackModel"
+                  placeholder="选择备用提供商后自动拉取，也可手动输入"
+                  filterable
+                  allow-create
+                  default-first-option
+                  clearable
+                  :disabled="!routeConfig.fallbackEnabled"
+                  :loading="modelLoadingMap[routeConfig.reportFallbackProviderId]"
+                  style="width: 100%"
+                >
+                  <el-option
+                    v-for="m in modelOptionsMap[routeConfig.reportFallbackProviderId] || []"
+                    :key="m"
+                    :value="m"
+                    :label="m"
+                  />
+                </el-select>
+              </el-form-item>
+              <div v-if="reportFallbackSameAsPrimary" class="fallback-warn">
+                备用与主路由的提供商、模型完全相同，主路由故障时备用大概率同样失败，建议更换组合。
+              </div>
             </el-form>
           </div>
 
@@ -540,6 +685,60 @@ onMounted(() => {
                 />
                 <span class="inline-hint">1 ~ 4096</span>
               </el-form-item>
+
+              <div class="fallback-divider">
+                <span>备用路由（主路由失败时自动降级）</span>
+                <el-button
+                  v-if="routeConfig.fallbackEnabled"
+                  link
+                  type="primary"
+                  size="small"
+                  :loading="configTesting"
+                  @click="handleTestRoute('cohortFallback')"
+                >
+                  测试备用连接
+                </el-button>
+              </div>
+              <el-form-item label="备用提供商">
+                <el-select
+                  v-model="routeConfig.cohortFallbackProviderId"
+                  placeholder="可选，留空则该功能不降级"
+                  clearable
+                  :disabled="!routeConfig.fallbackEnabled"
+                  style="width: 100%"
+                  @change="handleCohortFallbackProviderChange"
+                >
+                  <el-option
+                    v-for="p in enabledProviders"
+                    :key="p.id"
+                    :value="p.id"
+                    :label="p.name"
+                  />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="备用模型">
+                <el-select
+                  v-model="routeConfig.cohortFallbackModel"
+                  placeholder="选择备用提供商后自动拉取，也可手动输入"
+                  filterable
+                  allow-create
+                  default-first-option
+                  clearable
+                  :disabled="!routeConfig.fallbackEnabled"
+                  :loading="modelLoadingMap[routeConfig.cohortFallbackProviderId]"
+                  style="width: 100%"
+                >
+                  <el-option
+                    v-for="m in modelOptionsMap[routeConfig.cohortFallbackProviderId] || []"
+                    :key="m"
+                    :value="m"
+                    :label="m"
+                  />
+                </el-select>
+              </el-form-item>
+              <div v-if="cohortFallbackSameAsPrimary" class="fallback-warn">
+                备用与主路由的提供商、模型完全相同，主路由故障时备用大概率同样失败，建议更换组合。
+              </div>
             </el-form>
           </div>
         </div>
@@ -666,6 +865,55 @@ onMounted(() => {
   font-size: 12px;
   color: #6B7280;
   line-height: 1.6;
+}
+
+.fallback-global-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 16px;
+  margin-bottom: 16px;
+  border: 1px solid #E5E7EB;
+  border-radius: 6px;
+  background-color: #F9FAFB;
+}
+
+.fallback-global-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.fallback-global-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.fallback-divider {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 14px 0 12px;
+  padding-top: 12px;
+  border-top: 1px solid #E5E7EB;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #4B5563;
+}
+
+.fallback-warn {
+  padding: 8px 10px;
+  margin-bottom: 4px;
+  border-radius: 4px;
+  background-color: #FFFBEB;
+  border: 1px solid #FDE68A;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #D97706;
 }
 
 .global-row {

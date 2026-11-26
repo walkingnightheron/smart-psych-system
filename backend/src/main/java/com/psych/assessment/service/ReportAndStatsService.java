@@ -55,6 +55,7 @@ public class ReportAndStatsService {
     private final AccessControlService accessControlService;
     private final ReportTaskDispatcher reportTaskDispatcher;
     private final ObjectMapper objectMapper;
+    private final AuditLogService auditLogService;
 
     public ActivityStatisticsVO getActivityStatistics(Long activityId) {
         Long adminId = AuthContext.requireUserId();
@@ -225,6 +226,8 @@ public class ReportAndStatsService {
         accessControlService.checkAdminActivityAccess(activity, adminId);
 
         executeControlledRetry(report, resetCounter);
+        auditLogService.recordSuccess(AuditLogService.ACT_REPORT_RETRY,
+                AuditLogService.RES_REPORT, reportId, "重试报告[reportId=" + reportId + "]", null);
         AssessmentReport latest = reportRepository.findById(reportId).orElse(report);
         return buildReportDetailVO(latest, activity);
     }
@@ -236,6 +239,8 @@ public class ReportAndStatsService {
         accessControlService.checkStudentRecordOwner(report.getUserId(), studentId);
 
         executeControlledRetry(report, false);
+        auditLogService.recordSuccess(AuditLogService.ACT_REPORT_RETRY,
+                AuditLogService.RES_REPORT, reportId, "学生重试报告[reportId=" + reportId + "]", null);
         AssessmentActivity activity = activityRepository.findById(report.getActivityId()).orElse(null);
         AssessmentReport latest = reportRepository.findById(reportId).orElse(report);
         return buildReportDetailVO(latest, activity);

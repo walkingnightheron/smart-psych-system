@@ -69,6 +69,14 @@ public class AiDtos {
         private String cohortModel;
         private BigDecimal cohortTemperature;
         private Integer cohortMaxTokens;
+        /** 备用路由（自动降级）字段：仅在启用时有效，providerName 由 Service 回填。 */
+        private boolean fallbackEnabled;
+        private Long reportFallbackProviderId;
+        private String reportFallbackProviderName;
+        private String reportFallbackModel;
+        private Long cohortFallbackProviderId;
+        private String cohortFallbackProviderName;
+        private String cohortFallbackModel;
         private Integer timeoutSeconds;
         private LocalDateTime updatedAt;
     }
@@ -88,6 +96,12 @@ public class AiDtos {
         private String cohortModel;
         private BigDecimal cohortTemperature;
         private Integer cohortMaxTokens;
+        /** 备用路由（自动降级）配置 */
+        private Boolean fallbackEnabled;
+        private Long reportFallbackProviderId;
+        private String reportFallbackModel;
+        private Long cohortFallbackProviderId;
+        private String cohortFallbackModel;
         private Integer timeoutSeconds;
     }
 
